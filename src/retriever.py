@@ -32,9 +32,15 @@ QUERY_EXPANSIONS: dict[str, list[str]] = {
     "writeowner": ["writeowner", "set-domainobjectowner", "powerview", "owneredit"],
     "as-rep": ["as-rep", "roasting", "getnpusers", "dont_req_preauth", "hashcat 18200"],
     "bloodhound": ["bloodhound", "sharphound", "attack path", "shortest path"],
-    "winrm": ["winrm", "evil-winrm", "5985", "remote management users"],
+    "winrm": ["winrm", "evil-winrm", "remote management users"],
 }
 
+
+def _compute_lexical_density(query_terms: list[str], text: str, breadcrumb: str) -> float:
+    """Compute exact term match density in breadcrumb and text body."""
+    combined = f"{breadcrumb} {breadcrumb} {text}".lower()
+    matches = sum(1 for term in query_terms if term in combined)
+    return matches / max(len(query_terms), 1)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -355,7 +361,14 @@ class HybridRetriever:
             for c in merged:
                 text_lower = c.get("text", "").lower()
                 bc_lower = c.get("metadata", {}).get("breadcrumb", "").lower()
-                has_rce = any(term in text_lower for term in samba_rce_terms) or any(term in bc_lower for term in samba_rce_terms)
+                combined_lower = text_lower + " " + bc_lower
+                # Must actually be about samba
+                if not any(term in combined_lower for term in ["samba", "smbd", "sambacry"]):
+                    continue
+                # Skip Windows OS chunks for Samba RCE
+                if c.get("metadata", {}).get("os", "").lower() == "windows":
+                    continue
+                has_rce = any(term in combined_lower for term in samba_rce_terms)
                 is_pure_recon = any(recon in text_lower for recon in recon_indicators) and not has_rce
                 if has_rce and not is_pure_recon:
                     c["rrf_score"] = c.get("rrf_score", 0.0) * 2.5
@@ -372,6 +385,40 @@ class HybridRetriever:
                 text_lower = c.get("text", "").lower()
                 if any(term in text_lower for term in hash_terms):
                     c["rrf_score"] = c.get("rrf_score", 0.0) * 1.6
+
+        # 4. ESC specific sub-technique check
+        esc_match = re.search(r"\b(esc\d+)\b", q_lower)
+        if esc_match:
+            target_esc = esc_match.group(1).lower()
+            filtered_merged = []
+            for c in merged:
+                text_lower = (c.get("text", "") + " " + c.get("metadata", {}).get("breadcrumb", "")).lower()
+                if target_esc in text_lower:
+                    c["rrf_score"] = c.get("rrf_score", 0.0) * 3.0
+                    filtered_merged.append(c)
+            if filtered_merged:
+                merged = filtered_merged
+
+        # ── Step 3: Fast Lexical-Semantic Re-Ranking ────────────────────────
+        query_keywords = [
+            w.strip(".") for w in re.findall(r'[A-Za-z0-9_\-\.]+', q_lower)
+            if len(w.strip(".")) > 2 and w.strip(".") not in STOPWORDS
+        ]
+        if query_keywords and merged:
+            max_rrf = max((c.get("rrf_score", 0.0) for c in merged), default=1.0)
+            if max_rrf <= 0:
+                max_rrf = 1.0
+            for item in merged:
+                chunk_meta = item.get("metadata", {})
+                density = _compute_lexical_density(
+                    query_keywords,
+                    item.get("text", ""),
+                    chunk_meta.get("breadcrumb", "")
+                )
+                norm_score = item.get("rrf_score", 0.0) / max_rrf
+                combined_score = norm_score * 0.7 + density * 0.3
+                item["score"] = combined_score
+                item["rrf_score"] = combined_score
 
         merged.sort(key=lambda x: x.get("rrf_score", 0.0), reverse=True)
 
