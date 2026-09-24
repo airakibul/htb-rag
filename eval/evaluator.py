@@ -33,7 +33,7 @@ ANSWER_KEY    = EVAL_DIR / "answer_key.md"
 TEST_QS       = EVAL_DIR / "test_questions.md"
 RESULTS_OUT   = EVAL_DIR / "results.md"
 ANSWERS_OUT   = EVAL_DIR / "answers_generated.md"
-API_BASE      = "http://localhost:8000"
+API_BASE      = "http://127.0.0.1:8000"
 
 
 # ═════════════════════════════════════════════════════════════════════════════

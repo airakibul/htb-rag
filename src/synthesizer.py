@@ -118,12 +118,54 @@ def synthesize(
     ]
 
     client = groq.Groq(api_key=GROQ_API_KEY)
-    response = client.chat.completions.create(
-        model=GROQ_LLM_MODEL,
-        messages=messages,
-        max_tokens=3500,
-        temperature=0.1,
-    )
+    response = None
+    # 1. Primary Groq model (openai/gpt-oss-120b)
+    try:
+        response = client.chat.completions.create(
+            model=GROQ_LLM_MODEL,
+            messages=messages,
+            max_tokens=3000,
+            temperature=0.1,
+        )
+    except Exception as exc:
+        if "429" in str(exc) or "rate" in str(exc).lower() or "limit" in str(exc).lower():
+            # 2. Secondary Groq model with generous quota (llama-3.1-8b-instant)
+            try:
+                response = client.chat.completions.create(
+                    model="llama-3.1-8b-instant",
+                    messages=messages,
+                    max_tokens=2500,
+                    temperature=0.1,
+                )
+            except Exception:
+                # 3. Ultimate fallback: Gemini 2.5 Flash
+                try:
+                    import google.generativeai as genai
+                    from src.config import GEMINI_API_KEY, GEMINI_VISION_MODEL
+                    genai.configure(api_key=GEMINI_API_KEY)
+                    gemini_model = genai.GenerativeModel(
+                        model_name="models/gemini-2.5-flash",
+                        system_instruction=SYSTEM_PROMPT,
+                    )
+                    g_resp = gemini_model.generate_content(
+                        f"Context:\n{context}\n\nQuestion: {query}",
+                        generation_config={"temperature": 0.1, "max_output_tokens": 3000},
+                    )
+                    answer_text = g_resp.text.strip()
+                    chunks = retrieval_result.get("chunks", [])
+                    sources = sorted({c.get("metadata", {}).get("source", "") for c in chunks if c.get("metadata", {}).get("source")})
+                    graph = retrieval_result.get("graph", {})
+                    graph_used = bool(graph.get("matched_techniques") or graph.get("relevant_machines"))
+                    return {
+                        "answer": answer_text,
+                        "sources": sources,
+                        "chunks_used": len(chunks),
+                        "graph_used": graph_used,
+                    }
+                except Exception as final_exc:
+                    raise final_exc from exc
+        else:
+            raise
 
     answer_text = response.choices[0].message.content.strip()
 
