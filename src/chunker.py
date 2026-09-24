@@ -37,6 +37,16 @@ ATTACK_PHASE_MAP: dict[str, list[str]] = {
     "persistence":      ["persistence", "beyond root"],
 }
 
+IGNORE_HEADINGS: set[str] = {
+    "box info",
+    "box information",
+    "machine info",
+    "initial scanning",
+    "filtering",
+    "alternative methods for finding ipv6",
+    "from arp",
+}
+
 _IMAGE_RE = re.compile(r"!\[.*?\]\(.*?\)")
 _CVE_RE   = re.compile(r"CVE-\d{4}-\d+", re.IGNORECASE)
 
@@ -261,6 +271,9 @@ def chunk_file(md_path: str) -> list[dict[str, Any]]:
         """Build a chunk dict and append it to *chunks* (Rule 9: skip < 80 chars)."""
         text = text.strip()
         if len(text) < 80:                          # Rule 9
+            return
+
+        if h2.lower().strip() in IGNORE_HEADINGS or h3.lower().strip() in IGNORE_HEADINGS:
             return
 
         bc       = _breadcrumb(h2, h3)              # Rule 7 (breadcrumb)

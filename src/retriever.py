@@ -16,6 +16,14 @@ from src.config import TOP_K
 from src.embedder import embed_query, get_all_documents, get_collection
 from src.graph_builder import load_graph, query_graph
 
+STOPWORDS: set[str] = {
+    "what", "are", "the", "common", "across", "machines", "machine",
+    "htb", "provide", "a", "an", "which", "demonstrate", "demonstrates",
+    "how", "was", "it", "exploited", "each", "one", "and", "used", "is",
+    "for", "in", "of", "to", "with", "show", "techniques", "cheatsheet",
+    "give", "seen",
+}
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  Hybrid Retriever
@@ -54,7 +62,11 @@ class HybridRetriever:
         self, query: str, top_k: int = TOP_K,
     ) -> list[dict[str, Any]]:
         """Return the *top_k* BM25 hits for *query*."""
-        tokens = query.lower().split()
+        words = [w.strip("?,.!\"':;") for w in query.lower().split()]
+        clean_tokens = [w for w in words if w and w not in STOPWORDS]
+        tokens = clean_tokens if clean_tokens else [w for w in words if w]
+        if not tokens:
+            tokens = query.lower().split()
         scores = self.bm25.get_scores(tokens)
 
         # Indices of top-k scores (descending)
@@ -176,7 +188,12 @@ class HybridRetriever:
         q = query.lower()
 
         # OS
-        if "windows" in q:
+        windows_signals = [
+            "windows", "adcs", "active directory", "bloodhound",
+            "shadow credential", "as-rep", "winrm", "genericall",
+            "writedacl", "writeowner", "kerberos", "dcsync", "mimikatz",
+        ]
+        if any(sig in q for sig in windows_signals):
             os_val = "windows"
         elif "linux" in q:
             os_val = "linux"
@@ -241,10 +258,21 @@ class HybridRetriever:
         graph_hits  = query_graph(self.graph, query)
 
         # Fuse BM25 + vector
-        merged = self.reciprocal_rank_fusion(bm25_hits, vector_hits)[:top_k]
+        merged = self.reciprocal_rank_fusion(bm25_hits, vector_hits, k=60)
+
+        # Graph Boost: apply a 1.5x score boost to chunks whose source is in graph_hits["relevant_machines"]
+        relevant_machines = set(graph_hits.get("relevant_machines", []))
+        if relevant_machines:
+            for chunk in merged:
+                src = chunk.get("metadata", {}).get("source", "")
+                if src in relevant_machines:
+                    chunk["rrf_score"] = chunk.get("rrf_score", 0.0) * 1.5
+            merged.sort(key=lambda x: x.get("rrf_score", 0.0), reverse=True)
+            for rank, chunk in enumerate(merged, 1):
+                chunk["rank"] = rank
 
         return {
-            "chunks":          merged,
+            "chunks":          merged[:top_k],
             "graph":           graph_hits,
             "query":           query,
             "filters_applied": {"os": os_val, "difficulty": diff_val},

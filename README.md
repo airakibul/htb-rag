@@ -63,6 +63,7 @@ RAW_DIR=c:\Brain Station 23\htb-wiki\raw
 
 ```bash
 python -m src.ingest                    # full ingest
+python -m src.ingest_missing            # incremental ingest for missing files
 python -m src.ingest --file htb-box.md  # single file
 python -m src.ingest --dry-run          # stats only
 python -m src.ingest --skip-images      # faster (no vision)

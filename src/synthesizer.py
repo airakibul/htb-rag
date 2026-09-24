@@ -121,7 +121,7 @@ def synthesize(
     response = client.chat.completions.create(
         model=GROQ_LLM_MODEL,
         messages=messages,
-        max_tokens=1500,
+        max_tokens=3500,
         temperature=0.1,
     )
 

@@ -225,4 +225,5 @@ cache/
 scratch/
 eval/results.md
 eval/answers_generated.md
+raw/
 
