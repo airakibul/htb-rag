@@ -86,7 +86,7 @@ class HybridRetriever:
         for idx, doc in enumerate(self.docs):
             if os_filter:
                 doc_os = doc.get("metadata", {}).get("os", "unknown")
-                if doc_os != "unknown" and doc_os != os_filter:
+                if doc_os != os_filter:
                     continue
             valid_indices.append(idx)
 
@@ -242,10 +242,16 @@ class HybridRetriever:
             else "semantic"
         )
 
+        # Attack phase signal
+        phase_val = None
+        if any(w in q for w in ["privilege escalation", "privesc", "root", "administrator", "system hive", "potato", "watson"]):
+            phase_val = "privesc"
+
         return {
             "os": os_val,
             "difficulty": diff_val,
             "query_type": query_type,
+            "phase": phase_val,
         }
 
     # ── Main retrieve entry-point ────────────────────────────────────────
@@ -283,8 +289,9 @@ class HybridRetriever:
             if k in q_lower:
                 expanded_query += " " + " ".join(terms)
 
-        # Candidate pool size
-        is_broad = intent["query_type"] == "structured" or any(w in q_lower for w in ["cheatsheet", "techniques", "common", "across"])
+        # Candidate pool size: broad cheatsheets vs specific CVE / single attacks
+        is_specific = bool(re.search(r"cve-\d{4}-\d+", q_lower)) or "esc9" in q_lower or "cve" in q_lower
+        is_broad = (intent["query_type"] == "structured" or any(w in q_lower for w in ["cheatsheet", "common", "across"])) and not is_specific
         effective_top_k = 16 if is_broad else top_k
 
         # Three retrieval channels
@@ -295,6 +302,21 @@ class HybridRetriever:
         # Fuse BM25 + vector
         merged = self.reciprocal_rank_fusion(bm25_hits, vector_hits, k=60)
 
+        # Phase Boost: if user asks for privesc, boost chunks with attack_phase == 'privesc'
+        if intent.get("phase") == "privesc":
+            for chunk in merged:
+                if chunk.get("metadata", {}).get("attack_phase") == "privesc":
+                    chunk["rrf_score"] = chunk.get("rrf_score", 0.0) * 1.4
+
+        # Specific CVE Boost: exact match in cve_ids gets 5x score
+        cve_match = re.search(r"cve-\d{4}-\d+", q_lower)
+        if cve_match:
+            target_cve = cve_match.group(0).upper()
+            for chunk in merged:
+                chunk_cves = str(chunk.get("metadata", {}).get("cve_ids", ""))
+                if target_cve in chunk_cves.upper():
+                    chunk["rrf_score"] = chunk.get("rrf_score", 0.0) * 5.0
+
         # Graph Boost: apply 1.5x score boost to chunks whose source is in graph_hits["relevant_machines"]
         relevant_machines = set(graph_hits.get("relevant_machines", []))
         if relevant_machines:
@@ -302,7 +324,8 @@ class HybridRetriever:
                 src = chunk.get("metadata", {}).get("source", "")
                 if src in relevant_machines:
                     chunk["rrf_score"] = chunk.get("rrf_score", 0.0) * 1.5
-            merged.sort(key=lambda x: x.get("rrf_score", 0.0), reverse=True)
+
+        merged.sort(key=lambda x: x.get("rrf_score", 0.0), reverse=True)
 
         # Source Diversification: allow max 1 chunk per machine for broad queries (max 2 for specific)
         max_per_machine = 1 if is_broad else 2
@@ -324,9 +347,9 @@ class HybridRetriever:
 
         # Specific Query Cutoff: if top chunk has high confidence, drop weak tail
         final_chunks = diversified
-        if not is_broad and len(final_chunks) > 2:
+        if not is_broad and len(final_chunks) > 1:
             top_score = final_chunks[0].get("rrf_score", 0.0)
-            final_chunks = [c for c in final_chunks if c.get("rrf_score", 0.0) >= top_score * 0.55][:top_k]
+            final_chunks = [c for c in final_chunks if c.get("rrf_score", 0.0) >= top_score * 0.60][:top_k]
 
         return {
             "chunks":          final_chunks[:effective_top_k],
