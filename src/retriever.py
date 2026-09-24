@@ -289,14 +289,20 @@ class HybridRetriever:
             if k in q_lower:
                 expanded_query += " " + " ".join(terms)
 
-        # Candidate pool size: broad cheatsheets vs specific CVE / single attacks
+        # ── Adaptive Top-K and Candidate Pool based on Query Intent ─────────
         is_specific = bool(re.search(r"cve-\d{4}-\d+", q_lower)) or any(w in q_lower for w in ["cve", "esc9", "which machine", "how was", "step by step"])
         is_broad = any(w in q_lower for w in ["cheatsheet", "common", "across"]) and not is_specific
-        effective_top_k = 16 if is_broad else top_k
+
+        if is_broad:
+            effective_top_k = max(top_k, 15)   # Expand to 15 unique machines for cheatsheets
+            candidate_pool = max(effective_top_k * 5, 80)
+        else:
+            effective_top_k = min(top_k, 5)    # Strict small window for specific queries
+            candidate_pool = 25
 
         # Three retrieval channels
-        bm25_hits   = self.bm25_search(expanded_query, top_k=effective_top_k * 2, os_filter=os_val)
-        vector_hits = self.vector_search(expanded_query, top_k=effective_top_k * 2, where=where)
+        bm25_hits   = self.bm25_search(expanded_query, top_k=candidate_pool, os_filter=os_val)
+        vector_hits = self.vector_search(expanded_query, top_k=candidate_pool, where=where)
         graph_hits  = query_graph(self.graph, query)
 
         # Fuse BM25 + vector
@@ -391,7 +397,7 @@ class HybridRetriever:
         final_chunks = diversified
         if not is_broad and len(final_chunks) > 1:
             top_score = final_chunks[0].get("rrf_score", 0.0)
-            final_chunks = [c for c in final_chunks if c.get("rrf_score", 0.0) >= top_score * 0.60][:top_k]
+            final_chunks = [c for c in final_chunks if c.get("rrf_score", 0.0) >= top_score * 0.60][:effective_top_k]
 
         return {
             "chunks":          final_chunks[:effective_top_k],

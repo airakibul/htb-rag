@@ -129,22 +129,22 @@ def synthesize(
         )
     except Exception as exc:
         if "429" in str(exc) or "rate" in str(exc).lower() or "limit" in str(exc).lower():
-            # 2. Secondary Groq model with generous quota (llama-3.1-8b-instant)
+            # 2. Secondary Groq model with separate quota (openai/gpt-oss-20b)
             try:
                 response = client.chat.completions.create(
-                    model="llama-3.1-8b-instant",
+                    model="openai/gpt-oss-20b",
                     messages=messages,
                     max_tokens=2500,
                     temperature=0.1,
                 )
             except Exception:
-                # 3. Ultimate fallback: Gemini 2.5 Flash
+                # 3. Ultimate fallback: Gemini Flash
                 try:
                     import google.generativeai as genai
-                    from src.config import GEMINI_API_KEY, GEMINI_VISION_MODEL
+                    from src.config import GEMINI_API_KEY
                     genai.configure(api_key=GEMINI_API_KEY)
                     gemini_model = genai.GenerativeModel(
-                        model_name="models/gemini-2.5-flash",
+                        model_name="models/gemini-flash-latest",
                         system_instruction=SYSTEM_PROMPT,
                     )
                     g_resp = gemini_model.generate_content(
