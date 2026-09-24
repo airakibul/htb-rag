@@ -1,37 +1,37 @@
 # Evaluation Writeup — HTB Cheatsheet Assistant (RAG)
 
-## Retrieval Metrics (Phase 4 Adaptive Top-K & Discriminative Filters)
+## Retrieval Metrics (Phase 4 Step 3 Fast Lexical-Semantic Re-Ranking)
 
-| Q# | Question | Baseline (P0) P / R | Phase 3 P / R | **Phase 4 (Step 2) P / R** | Sources Found |
-|----|----------|---------------------|---------------|-----------------------------|---------------|
-| 1  | Windows privesc cheatsheet | 0.29 / 0.06 | 0.31 / 0.16 | **0.33 / 0.16** | axlle, bounty, bruno, cereal, control, dropzone |
-| 2  | Linux privesc cheatsheet | 0.29 / 0.07 | 0.19 / 0.11 | **0.20 / 0.11** | backendtwo, canape, clicker, derailed, devvortex, drive |
-| 3  | AD attack techniques | 0.71 / 0.10 | 0.62 / 0.21 | **0.60 / 0.19** | active, administrator, apt, bruno, crafty, escape |
-| 4  | ADCS certificate abuse | 0.71 / 0.24 | 0.75 / 0.57 | **1.00 / 0.19** | certified, fluffy, mirage, rebound |
-| 5  | Password cracking / hash dump | 0.38 / 0.06 | 0.31 / 0.09 | **0.33 / 0.09** | bastion, craft, crossfit, dab, delivery, freelancer |
-| 6  | AS-REP Roasting | 1.00 / 0.33 | 1.00 / 0.17 | **1.00 / 0.17** | jab, pivotapi, sauna |
-| 7  | certipy usage | 0.71 / 0.24 | 0.71 / 0.24 | **1.00 / 0.10** | certified, coder |
-| 8  | CVE-2026-4480 | 0.14 / 1.00 | 1.00 / 1.00 | **1.00 / 1.00** | abducted |
-| 9  | WriteOwner abuse | 0.38 / 0.21 | 0.25 / 0.29 | **1.00 / 0.29** | certified, escape, escapetwo, haze |
-| 10 | ESC9 ADCS attack | 0.17 / 0.50 | 0.50 / 1.00 | **0.50 / 1.00** | authority, certified, manager, scepter |
-| 11 | BloodHound attack paths | 0.88 / 0.13 | 0.94 / 0.29 | **1.00 / 0.08** | escape, scepter, streamio, support |
-| 12 | Shadow Credentials | 0.71 / 0.38 | 1.00 / 0.15 | **1.00 / 0.23** | certified, darkcorp, outdated |
-| 13 | Samba RCE | 0.12 / 0.04 | 0.31 / 0.20 | **0.40 / 0.08** | abducted, lame, monitorsfour, solarlab, university |
-| 14 | evil-winrm shell access | 1.00 / 0.09 | 1.00 / 0.08 | **1.00 / 0.03** | absolute, authority |
-| 15 | GenericAll abuse | 0.62 / 0.25 | 1.00 / 0.05 | **1.00 / 0.05** | infiltrator |
-| **Avg** | | **0.23 / 0.09** | **0.66 / 0.31** | **0.76 / 0.25** | |
+| Q# | Question | Baseline (P0) P / R | Phase 3 P / R | Phase 4 (Step 2) P / R | **Phase 4 (Step 3) P / R** | Sources Found |
+|----|----------|---------------------|---------------|------------------------|-----------------------------|---------------|
+| 1  | Windows privesc cheatsheet | 0.29 / 0.06 | 0.31 / 0.16 | 0.33 / 0.16 | **0.33 / 0.16** | arctic, bounty, bruno, cereal, control, dropzone |
+| 2  | Linux privesc cheatsheet | 0.29 / 0.07 | 0.19 / 0.11 | 0.20 / 0.11 | **0.33 / 0.18** | backdoor, bamboo, brainfuck, clicker, devvortex, expressway |
+| 3  | AD attack techniques | 0.71 / 0.10 | 0.62 / 0.21 | 0.60 / 0.19 | **0.53 / 0.17** | active, administrator, authority, bruno, cerberus, escape |
+| 4  | ADCS certificate abuse | 0.71 / 0.24 | 0.75 / 0.57 | 1.00 / 0.19 | **1.00 / 0.19** | certified, fluffy, mirage, rebound |
+| 5  | Password cracking / hash dump | 0.38 / 0.06 | 0.31 / 0.09 | 0.33 / 0.09 | **0.40 / 0.11** | bastion, craft, crossfit, dab, delivery, freelancer |
+| 6  | AS-REP Roasting | 1.00 / 0.33 | 1.00 / 0.17 | 1.00 / 0.17 | **1.00 / 0.28** | absolute, forest, jab, pivotapi, sauna |
+| 7  | certipy usage | 0.71 / 0.24 | 0.71 / 0.24 | 1.00 / 0.10 | **1.00 / 0.19** | certified, coder, escapetwo, manager |
+| 8  | CVE-2026-4480 | 0.14 / 1.00 | 1.00 / 1.00 | 1.00 / 1.00 | **1.00 / 1.00** | abducted |
+| 9  | WriteOwner abuse | 0.38 / 0.21 | 0.25 / 0.29 | 1.00 / 0.29 | **1.00 / 0.29** | certified, escapetwo, haze, reel |
+| 10 | ESC9 ADCS attack | 0.17 / 0.50 | 0.50 / 1.00 | 0.50 / 1.00 | **1.00 / 1.00** | certified, scepter |
+| 11 | BloodHound attack paths | 0.88 / 0.13 | 0.94 / 0.29 | 1.00 / 0.08 | **1.00 / 0.08** | fluffy, multimaster, reel, scepter |
+| 12 | Shadow Credentials | 0.71 / 0.38 | 1.00 / 0.15 | 1.00 / 0.23 | **1.00 / 0.23** | certified, outdated, rebound |
+| 13 | Samba RCE | 0.12 / 0.04 | 0.31 / 0.20 | 0.40 / 0.08 | **1.00 / 0.08** | abducted, lame |
+| 14 | evil-winrm shell access | 1.00 / 0.09 | 1.00 / 0.08 | 1.00 / 0.03 | **1.00 / 0.07** | apt, coder, compiled, multimaster, puppy |
+| 15 | GenericAll abuse | 0.62 / 0.25 | 1.00 / 0.05 | 1.00 / 0.05 | **1.00 / 0.05** | infiltrator |
+| **Avg** | | **0.23 / 0.09** | **0.66 / 0.31** | **0.76 / 0.25** | **0.84 / 0.27** | |
 
 ---
 
 ## Architectural Iteration Summary
 
-| Metric | Phase 0 (Baseline) | Phase 2 (Intermediate) | Phase 3 (Clean Slate) | Phase 4 (Step 2 Adaptive Top-K) | Total Gain |
-|--------|-------------------|------------------------|-----------------------|----------------------------------|------------|
-| **Average Precision** | **0.23** | **0.54** | **0.66** | **0.76** | **+230% (3.3x gain)** |
-| **Average Recall** | **0.09** | **0.25** | **0.31** | **0.25** | **+178% (2.8x gain)** |
-| **Perfect Precision (P=1.0)** | 2 questions | 3 questions | 6 questions | **9 questions (Q4, Q6, Q7, Q8, Q9, Q11, Q12, Q14, Q15)** | **60% of test suite is 100% precise** |
-| **Indexed Chunks** | ~5,000 chunks | 10,833 chunks | 11,798 chunks | **11,798 chunks** | All bounded <= 2,400 chars |
-| **Known OS Coverage** | 15% (85% unknown) | 15% (85% unknown) | 98.7% | **98.7% (Linux: 7,824 / Win: 3,821)** | Fixed icon stripping bug |
+| Metric | Phase 0 (Baseline) | Phase 2 (Intermediate) | Phase 3 (Clean Slate) | Phase 4 (Step 2) | Phase 4 (Step 3 Re-Ranking) | Total Gain |
+|--------|-------------------|------------------------|-----------------------|------------------|-----------------------------|------------|
+| **Average Precision** | **0.23** | **0.54** | **0.66** | **0.76** | **0.84** | **+265% (3.7x gain)** |
+| **Average Recall** | **0.09** | **0.25** | **0.31** | **0.25** | **0.27** | **+200% (3.0x gain)** |
+| **Perfect Precision (P=1.0)** | 2 questions | 3 questions | 6 questions | 9 questions | **11 questions (Q4, Q6, Q7, Q8, Q9, Q10, Q11, Q12, Q13, Q14, Q15)** | **73% of test suite is 100% precise** |
+| **Indexed Chunks** | ~5,000 chunks | 10,833 chunks | 11,798 chunks | 11,798 chunks | **11,798 chunks** | All bounded <= 2,400 chars |
+| **Known OS Coverage** | 15% (85% unknown) | 15% (85% unknown) | 98.7% | 98.7% | **98.7% (Linux: 7,824 / Win: 3,821)** | Fixed icon stripping bug |
 
 ---
 
