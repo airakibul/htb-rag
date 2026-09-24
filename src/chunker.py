@@ -121,6 +121,59 @@ def _breadcrumb(h2: str, h3: str) -> str:
     return f"{h2} > {h3}" if h3 else h2
 
 
+def _split_into_paragraphs(text: str, max_chars: int = CHAR_LIMIT) -> list[str]:
+    """Split oversized text by double newlines or single newlines into chunks under max_chars."""
+    paragraphs = text.split("\n\n")
+    refined: list[str] = []
+    for p in paragraphs:
+        if len(p) > max_chars:
+            lines = p.split("\n")
+            cur_lines: list[str] = []
+            cur_l = 0
+            for line in lines:
+                if len(line) > max_chars:
+                    if cur_lines:
+                        refined.append("\n".join(cur_lines))
+                        cur_lines = []
+                        cur_l = 0
+                    for i in range(0, len(line), max_chars):
+                        refined.append(line[i : i + max_chars])
+                    continue
+                if cur_l + len(line) + 1 > max_chars and cur_lines:
+                    refined.append("\n".join(cur_lines))
+                    cur_lines = [line]
+                    cur_l = len(line)
+                else:
+                    cur_lines.append(line)
+                    cur_l += len(line) + 1
+            if cur_lines:
+                refined.append("\n".join(cur_lines))
+        else:
+            refined.append(p)
+
+    chunks: list[str] = []
+    current_chunk: list[str] = []
+    current_len = 0
+
+    for p in refined:
+        p_str = p.strip()
+        if not p_str:
+            continue
+        if current_len + len(p_str) + 2 > max_chars and current_chunk:
+            chunks.append("\n\n".join(current_chunk))
+            current_chunk = [p_str]
+            current_len = len(p_str)
+        else:
+            current_chunk.append(p_str)
+            current_len += len(p_str) + 2
+
+    if current_chunk:
+        chunks.append("\n\n".join(current_chunk))
+    return chunks if chunks else [text]
+
+
+
+
 # ── Code-block–aware heading splitter ────────────────────────────────────────
 
 def _code_block_ranges(text: str) -> list[tuple[int, int]]:
@@ -233,6 +286,9 @@ def chunk_file(md_path: str) -> list[dict[str, Any]]:
 
     raw = path.read_text(encoding="utf-8", errors="ignore")
 
+    # FIX: Normalize stuck headings (e.g. "Creator ## Recon" -> "Creator\n\n## Recon")
+    raw = re.sub(r'([^\n])\s*(#{2,4}\s+[A-Za-z0-9])', r'\1\n\n\2', raw)
+
     # ── Rule 6: stub detection (raw word count) ──────────────────────────
     is_stub = len(raw.split()) < 500
 
@@ -253,6 +309,11 @@ def chunk_file(md_path: str) -> list[dict[str, Any]]:
 
     # ── Rule 1: parse Box Info → extract os, difficulty → skip block ─────
     detected_os, difficulty, intro_clean = _parse_box_info(intro_raw)
+    if detected_os == "unknown":
+        detected_os = _detect_os(raw[:4000])
+    if difficulty == "unknown":
+        difficulty = _detect_difficulty(raw[:4000])
+
 
     # Strip ``# Title`` line from intro so only prose remains
     intro_clean = re.sub(
@@ -268,17 +329,27 @@ def chunk_file(md_path: str) -> list[dict[str, Any]]:
     chunks: list[dict[str, Any]] = []
 
     def _emit(text: str, h2: str, h3: str, chunk_type: str = "text") -> None:
-        """Build a chunk dict and append it to *chunks* (Rule 9: skip < 80 chars)."""
+        """Build a chunk dict with rich semantic context."""
         text = text.strip()
-        if len(text) < 80:                          # Rule 9
+        if len(text) < 80:
             return
 
         if h2.lower().strip() in IGNORE_HEADINGS or h3.lower().strip() in IGNORE_HEADINGS:
             return
 
-        bc       = _breadcrumb(h2, h3)              # Rule 7 (breadcrumb)
-        prefixed = f"[{source} | {bc}]\n\n{text}"   # Rule 7 (prefix)
-        cves     = _extract_cves(text)               # Rule 10
+        # Recursive split if single chunk still exceeds CHAR_LIMIT
+        if len(text) > CHAR_LIMIT:
+            sub_parts = _split_into_paragraphs(text, CHAR_LIMIT)
+            if len(sub_parts) > 1:
+                for sub in sub_parts:
+                    _emit(sub, h2, h3, chunk_type)
+                return
+
+        bc       = _breadcrumb(h2, h3)
+        phase    = _attack_phase(h2)
+        # Rich Context Prefix for high-accuracy BM25 & dense vector matching
+        prefixed = f"[Machine: {name} | OS: {detected_os.capitalize()} | Phase: {phase.capitalize()} | Path: {bc}]\n\n{text}"
+        cves     = _extract_cves(text)
 
         chunks.append({
             "text":            prefixed,
@@ -294,7 +365,7 @@ def chunk_file(md_path: str) -> list[dict[str, Any]]:
             "cve_ids":         cves,
             "tools_mentioned": _find_tools(text),
             "has_code":        _has_code(text),
-            "attack_phase":    _attack_phase(h2),
+            "attack_phase":    phase,
             "stub_file":       is_stub,
         })
 
