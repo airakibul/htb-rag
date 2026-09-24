@@ -290,8 +290,8 @@ class HybridRetriever:
                 expanded_query += " " + " ".join(terms)
 
         # Candidate pool size: broad cheatsheets vs specific CVE / single attacks
-        is_specific = bool(re.search(r"cve-\d{4}-\d+", q_lower)) or "esc9" in q_lower or "cve" in q_lower
-        is_broad = (intent["query_type"] == "structured" or any(w in q_lower for w in ["cheatsheet", "common", "across"])) and not is_specific
+        is_specific = bool(re.search(r"cve-\d{4}-\d+", q_lower)) or any(w in q_lower for w in ["cve", "esc9", "which machine", "how was", "step by step"])
+        is_broad = any(w in q_lower for w in ["cheatsheet", "common", "across"]) and not is_specific
         effective_top_k = 16 if is_broad else top_k
 
         # Three retrieval channels
@@ -324,6 +324,48 @@ class HybridRetriever:
                 src = chunk.get("metadata", {}).get("source", "")
                 if src in relevant_machines:
                     chunk["rrf_score"] = chunk.get("rrf_score", 0.0) * 1.5
+
+        # ── Specific Technique Discriminative Filters ───────────────────────
+        # 1. WriteOwner strict discriminative check
+        if "writeowner" in q_lower:
+            writeowner_terms = {"writeowner", "owneredit", "set-domainobjectowner"}
+            filtered_merged = []
+            for c in merged:
+                text_lower = (c.get("text", "") + " " + c.get("metadata", {}).get("breadcrumb", "")).lower()
+                # Strongly penalize chunks that only talk about GenericAll/WriteDACL without mentioning owner
+                if any(term in text_lower for term in writeowner_terms):
+                    c["rrf_score"] = c.get("rrf_score", 0.0) * 2.5
+                    filtered_merged.append(c)
+                elif not any(term in text_lower for term in ["genericall", "writedacl", "genericwrite"]):
+                    filtered_merged.append(c)
+            if filtered_merged:
+                merged = filtered_merged
+
+        # 2. Samba RCE strict discriminative check
+        if "samba" in q_lower and any(w in q_lower for w in ["rce", "remote code execution", "exploit"]):
+            samba_rce_terms = {"cve-2007-2447", "usermap_script", "sambacry", "cve-2017-7494", "exploit", "command execution", "remote code", "metasploit", "payload"}
+            recon_indicators = {"smbclient -l", "null session", "enum4linux", "shares listing", "listing shares"}
+            filtered_merged = []
+            for c in merged:
+                text_lower = c.get("text", "").lower()
+                bc_lower = c.get("metadata", {}).get("breadcrumb", "").lower()
+                has_rce = any(term in text_lower for term in samba_rce_terms) or any(term in bc_lower for term in samba_rce_terms)
+                is_pure_recon = any(recon in text_lower for recon in recon_indicators) and not has_rce
+                if has_rce and not is_pure_recon:
+                    c["rrf_score"] = c.get("rrf_score", 0.0) * 2.5
+                    filtered_merged.append(c)
+                elif not is_pure_recon:
+                    filtered_merged.append(c)
+            if filtered_merged:
+                merged = filtered_merged
+
+        # 3. Password Cracking / Hash Dumping check
+        if any(w in q_lower for w in ["hash dump", "password cracking", "hashcat", "mimikatz", "secretsdump"]):
+            hash_terms = {"secretsdump", "mimikatz", "hashcat", "john", "ntds.dit", "sam", "as-rep", "kerberoast", "gpp-decrypt"}
+            for c in merged:
+                text_lower = c.get("text", "").lower()
+                if any(term in text_lower for term in hash_terms):
+                    c["rrf_score"] = c.get("rrf_score", 0.0) * 1.6
 
         merged.sort(key=lambda x: x.get("rrf_score", 0.0), reverse=True)
 
