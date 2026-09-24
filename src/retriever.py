@@ -24,6 +24,18 @@ STOPWORDS: set[str] = {
     "give", "seen",
 }
 
+QUERY_EXPANSIONS: dict[str, list[str]] = {
+    "samba": ["samba", "smbd", "cve-2007-2447", "usermap_script", "sambacry", "cve-2017-7494"],
+    "adcs": ["adcs", "certipy", "esc1", "esc8", "esc9", "certificate", "templates"],
+    "shadow credential": ["shadow credential", "certipy", "pywhisker", "whisker", "msds-keycredentiallink"],
+    "genericall": ["genericall", "powerview", "bloodyad", "net rpc password", "dacledit"],
+    "writeowner": ["writeowner", "set-domainobjectowner", "powerview", "owneredit"],
+    "as-rep": ["as-rep", "roasting", "getnpusers", "dont_req_preauth", "hashcat 18200"],
+    "bloodhound": ["bloodhound", "sharphound", "attack path", "shortest path"],
+    "winrm": ["winrm", "evil-winrm", "5985", "remote management users"],
+}
+
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  Hybrid Retriever
@@ -59,9 +71,9 @@ class HybridRetriever:
     # ── BM25 (lexical) ──────────────────────────────────────────────────
 
     def bm25_search(
-        self, query: str, top_k: int = TOP_K,
+        self, query: str, top_k: int = TOP_K, os_filter: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Return the *top_k* BM25 hits for *query*."""
+        """Return the *top_k* BM25 hits, respecting OS filter if specified."""
         words = [w.strip("?,.!\"':;") for w in query.lower().split()]
         clean_tokens = [w for w in words if w and w not in STOPWORDS]
         tokens = clean_tokens if clean_tokens else [w for w in words if w]
@@ -69,9 +81,20 @@ class HybridRetriever:
             tokens = query.lower().split()
         scores = self.bm25.get_scores(tokens)
 
-        # Indices of top-k scores (descending)
+        # Filter candidate indices by OS if specified
+        valid_indices = []
+        for idx, doc in enumerate(self.docs):
+            if os_filter:
+                doc_os = doc.get("metadata", {}).get("os", "unknown")
+                if doc_os != "unknown" and doc_os != os_filter:
+                    continue
+            valid_indices.append(idx)
+
+        if not valid_indices:
+            valid_indices = list(range(len(scores)))
+
         ranked = sorted(
-            range(len(scores)), key=lambda i: scores[i], reverse=True,
+            valid_indices, key=lambda i: scores[i], reverse=True,
         )[:top_k]
 
         results: list[dict[str, Any]] = []
@@ -83,6 +106,7 @@ class HybridRetriever:
                 "rank":     rank,
             })
         return results
+
 
     # ── ChromaDB vector (semantic) ───────────────────────────────────────
 
@@ -252,15 +276,26 @@ class HybridRetriever:
 
         where = self.build_where_filter(os_val, diff_val)
 
+        # Apply query expansion
+        q_lower = query.lower()
+        expanded_query = query
+        for k, terms in QUERY_EXPANSIONS.items():
+            if k in q_lower:
+                expanded_query += " " + " ".join(terms)
+
+        # Candidate pool size
+        is_broad = intent["query_type"] == "structured" or any(w in q_lower for w in ["cheatsheet", "techniques", "common", "across"])
+        effective_top_k = 16 if is_broad else top_k
+
         # Three retrieval channels
-        bm25_hits   = self.bm25_search(query, top_k=top_k * 2)
-        vector_hits = self.vector_search(query, top_k=top_k * 2, where=where)
+        bm25_hits   = self.bm25_search(expanded_query, top_k=effective_top_k * 2, os_filter=os_val)
+        vector_hits = self.vector_search(expanded_query, top_k=effective_top_k * 2, where=where)
         graph_hits  = query_graph(self.graph, query)
 
         # Fuse BM25 + vector
         merged = self.reciprocal_rank_fusion(bm25_hits, vector_hits, k=60)
 
-        # Graph Boost: apply a 1.5x score boost to chunks whose source is in graph_hits["relevant_machines"]
+        # Graph Boost: apply 1.5x score boost to chunks whose source is in graph_hits["relevant_machines"]
         relevant_machines = set(graph_hits.get("relevant_machines", []))
         if relevant_machines:
             for chunk in merged:
@@ -268,11 +303,33 @@ class HybridRetriever:
                 if src in relevant_machines:
                     chunk["rrf_score"] = chunk.get("rrf_score", 0.0) * 1.5
             merged.sort(key=lambda x: x.get("rrf_score", 0.0), reverse=True)
-            for rank, chunk in enumerate(merged, 1):
-                chunk["rank"] = rank
+
+        # Source Diversification: allow max 1 chunk per machine for broad queries (max 2 for specific)
+        max_per_machine = 1 if is_broad else 2
+        diversified: list[dict[str, Any]] = []
+        machine_counts: dict[str, int] = {}
+
+        for chunk in merged:
+            src = chunk.get("metadata", {}).get("source", "unknown")
+            count = machine_counts.get(src, 0)
+            if count < max_per_machine:
+                diversified.append(chunk)
+                machine_counts[src] = count + 1
+            if len(diversified) >= effective_top_k:
+                break
+
+        # Re-rank
+        for rank, chunk in enumerate(diversified, 1):
+            chunk["rank"] = rank
+
+        # Specific Query Cutoff: if top chunk has high confidence, drop weak tail
+        final_chunks = diversified
+        if not is_broad and len(final_chunks) > 2:
+            top_score = final_chunks[0].get("rrf_score", 0.0)
+            final_chunks = [c for c in final_chunks if c.get("rrf_score", 0.0) >= top_score * 0.55][:top_k]
 
         return {
-            "chunks":          merged[:top_k],
+            "chunks":          final_chunks[:effective_top_k],
             "graph":           graph_hits,
             "query":           query,
             "filters_applied": {"os": os_val, "difficulty": diff_val},
