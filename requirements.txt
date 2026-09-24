@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+chromadb
+networkx
+groq
+google-generativeai
+rank_bm25
+requests
+pillow
+python-dotenv
