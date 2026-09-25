@@ -399,6 +399,19 @@ class HybridRetriever:
             if filtered_merged:
                 merged = filtered_merged
 
+        # ── OS Enforcement for Broad Queries ────────────────────────────────
+        # When intent detects a specific OS (e.g., "windows" or "linux"),
+        # remove chunks from other OSes to prevent off-topic results.
+        if is_broad and os_val:
+            os_lower = os_val.lower()
+            os_filtered = [
+                c for c in merged
+                if c.get("metadata", {}).get("os", "unknown").lower() in (os_lower, "unknown")
+            ]
+            # Only apply if we still have enough results
+            if len(os_filtered) >= effective_top_k:
+                merged = os_filtered
+
         # ── Step 3: Fast Lexical-Semantic Re-Ranking ────────────────────────
         query_keywords = [
             w.strip(".") for w in re.findall(r'[A-Za-z0-9_\-\.]+', q_lower)
