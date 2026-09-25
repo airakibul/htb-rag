@@ -41,7 +41,6 @@ IGNORE_HEADINGS: set[str] = {
     "box info",
     "box information",
     "machine info",
-    "initial scanning",
     "filtering",
     "alternative methods for finding ipv6",
     "from arp",
@@ -87,18 +86,30 @@ def _detect_difficulty(text: str) -> str:
 
 
 def _attack_phase(h2: str) -> str:
-    """Classify the attack phase from an ``##`` heading."""
+    """Classify the attack phase from an ## heading."""
     low = h2.lower()
-    for phase, keywords in ATTACK_PHASE_MAP.items():
-        if any(kw in low for kw in keywords):
-            return phase
+    if any(kw in low for kw in ["root", "admin", "administrator", "system", "privilege", "escalation", "privesc"]):
+        return "privesc"
+    if any(kw in low for kw in ["recon", "scanning", "enumeration"]):
+        return "recon"
+    if any(kw in low for kw in ["shell as", "foothold", "user", "initial access", "compromise"]):
+        return "foothold"
+    if any(kw in low for kw in ["lateral", "pivot", "move"]):
+        return "lateral-movement"
+    if any(kw in low for kw in ["persistence", "beyond root"]):
+        return "persistence"
     return "unknown"
 
 
+_TOOL_PATTERNS: dict[str, re.Pattern] = {
+    tool: re.compile(rf"\b{re.escape(tool)}\b", re.IGNORECASE)
+    for tool in KNOWN_TOOLS
+}
+
+
 def _find_tools(text: str) -> list[str]:
-    """Return sorted list of known tools mentioned in *text*."""
-    low = text.lower()
-    return sorted(t for t in KNOWN_TOOLS if t in low)
+    """Return sorted list of known tools mentioned in text using exact word boundaries."""
+    return sorted(tool for tool, pat in _TOOL_PATTERNS.items() if pat.search(text))
 
 
 def _has_code(text: str) -> bool:
@@ -116,30 +127,32 @@ def _clean(text: str) -> str:
     return _IMAGE_RE.sub("", text).strip()
 
 
-def _breadcrumb(h2: str, h3: str) -> str:
-    """Build ``"h2 > h3"`` breadcrumb string."""
-    return f"{h2} > {h3}" if h3 else h2
+def _breadcrumb(h2: str, h3: str = "", h4: str = "") -> str:
+    """Build 'h2 > h3 > h4' breadcrumb string."""
+    parts = [p.strip() for p in (h2, h3, h4) if p and p.strip()]
+    return " > ".join(parts)
 
 
 def _split_into_paragraphs(text: str, max_chars: int = CHAR_LIMIT) -> list[str]:
-    """Split oversized text by double newlines or single newlines into chunks under max_chars."""
+    """Split oversized text into chunks under max_chars while ensuring code blocks are balanced."""
+    budget = max_chars - 80  # Reserve buffer for fence closing/re-opening
     paragraphs = text.split("\n\n")
     refined: list[str] = []
     for p in paragraphs:
-        if len(p) > max_chars:
+        if len(p) > budget:
             lines = p.split("\n")
             cur_lines: list[str] = []
             cur_l = 0
             for line in lines:
-                if len(line) > max_chars:
+                if len(line) > budget:
                     if cur_lines:
                         refined.append("\n".join(cur_lines))
                         cur_lines = []
                         cur_l = 0
-                    for i in range(0, len(line), max_chars):
-                        refined.append(line[i : i + max_chars])
+                    for i in range(0, len(line), budget):
+                        refined.append(line[i : i + budget])
                     continue
-                if cur_l + len(line) + 1 > max_chars and cur_lines:
+                if cur_l + len(line) + 1 > budget and cur_lines:
                     refined.append("\n".join(cur_lines))
                     cur_lines = [line]
                     cur_l = len(line)
@@ -154,21 +167,48 @@ def _split_into_paragraphs(text: str, max_chars: int = CHAR_LIMIT) -> list[str]:
     chunks: list[str] = []
     current_chunk: list[str] = []
     current_len = 0
+    in_code_block = False
+    current_lang = ""
 
     for p in refined:
         p_str = p.strip()
         if not p_str:
             continue
-        if current_len + len(p_str) + 2 > max_chars and current_chunk:
-            chunks.append("\n\n".join(current_chunk))
-            current_chunk = [p_str]
-            current_len = len(p_str)
+
+        if current_len + len(p_str) + 2 > budget and current_chunk:
+            chunk_body = "\n\n".join(current_chunk)
+            # If splitting inside a code block, close it cleanly
+            if in_code_block:
+                chunk_body += "\n```"
+            chunks.append(chunk_body)
+
+            # Re-open the code block at the beginning of the next chunk
+            if in_code_block:
+                current_chunk = [f"```{current_lang}\n{p_str}"]
+            else:
+                current_chunk = [p_str]
+            current_len = len(current_chunk[0])
         else:
             current_chunk.append(p_str)
             current_len += len(p_str) + 2
 
+        # Track opening/closing of code fences and capture code language
+        for line in p_str.split("\n"):
+            line_str = line.strip()
+            if line_str.startswith("```"):
+                if in_code_block:
+                    in_code_block = False
+                    current_lang = ""
+                else:
+                    in_code_block = True
+                    current_lang = line_str[3:].strip()
+
     if current_chunk:
-        chunks.append("\n\n".join(current_chunk))
+        chunk_body = "\n\n".join(current_chunk)
+        if in_code_block:
+            chunk_body += "\n```"
+        chunks.append(chunk_body)
+
     return chunks if chunks else [text]
 
 
@@ -287,7 +327,7 @@ def chunk_file(md_path: str) -> list[dict[str, Any]]:
     raw = path.read_text(encoding="utf-8", errors="ignore")
 
     # FIX: Normalize stuck headings (e.g. "Creator ## Recon" -> "Creator\n\n## Recon")
-    raw = re.sub(r'([^\n])\s*(#{2,4}\s+[A-Za-z0-9])', r'\1\n\n\2', raw)
+    raw = re.sub(r'([^\n#\r])[ \t]*(#{2,4}[ \t]+[A-Za-z0-9])', r'\1\n\n\2', raw)
 
     # ── Rule 6: stub detection (raw word count) ──────────────────────────
     is_stub = len(raw.split()) < 500
@@ -328,24 +368,24 @@ def chunk_file(md_path: str) -> list[dict[str, Any]]:
     # ── Chunk emitter ────────────────────────────────────────────────────
     chunks: list[dict[str, Any]] = []
 
-    def _emit(text: str, h2: str, h3: str, chunk_type: str = "text") -> None:
+    def _emit(text: str, h2: str, h3: str = "", h4: str = "", chunk_type: str = "text") -> None:
         """Build a chunk dict with rich semantic context."""
         text = text.strip()
         if len(text) < 80:
             return
 
-        if h2.lower().strip() in IGNORE_HEADINGS or h3.lower().strip() in IGNORE_HEADINGS:
+        if h2.lower().strip() in IGNORE_HEADINGS or h3.lower().strip() in IGNORE_HEADINGS or (h4 and h4.lower().strip() in IGNORE_HEADINGS):
             return
 
         # Recursive split if single chunk still exceeds CHAR_LIMIT
         if len(text) > CHAR_LIMIT:
             sub_parts = _split_into_paragraphs(text, CHAR_LIMIT)
-            if len(sub_parts) > 1:
+            if len(sub_parts) > 1 and all(len(s) < len(text) for s in sub_parts):
                 for sub in sub_parts:
-                    _emit(sub, h2, h3, chunk_type)
+                    _emit(sub, h2, h3, h4, chunk_type)
                 return
 
-        bc       = _breadcrumb(h2, h3)
+        bc       = _breadcrumb(h2, h3, h4)
         phase    = _attack_phase(h2)
         # Rich Context Prefix for high-accuracy BM25 & dense vector matching
         prefixed = f"[Machine: {name} | OS: {detected_os.capitalize()} | Phase: {phase.capitalize()} | Path: {bc}]\n\n{text}"
@@ -359,6 +399,7 @@ def chunk_file(md_path: str) -> list[dict[str, Any]]:
             "difficulty":      difficulty,
             "h2":              h2,
             "h3":              h3,
+            "h4":              h4,
             "breadcrumb":      bc,
             "chunk_type":      chunk_type,
             "has_cve":         bool(cves),
@@ -371,7 +412,7 @@ def chunk_file(md_path: str) -> list[dict[str, Any]]:
 
     # ── Rule 2: intro paragraph → one "summary" chunk ───────────────────
     if intro_clean:
-        _emit(intro_clean, name, "", "summary")
+        _emit(intro_clean, name, "", "", "summary")
 
     # ── Rules 3-5: section chunking ──────────────────────────────────────
     if has_h3:
@@ -383,7 +424,7 @@ def chunk_file(md_path: str) -> list[dict[str, Any]]:
                 # Rule 4: sub-split by #### if > CHAR_LIMIT
                 if len(h3_body) > CHAR_LIMIT:
                     for h4_heading, h4_body in _split_at_level(h3_body, 4):
-                        _emit(h4_body, h2_heading, h4_heading or h3_heading)
+                        _emit(h4_body, h2_heading, h3_heading, h4_heading)
                 else:
                     _emit(h3_body, h2_heading, h3_heading)
     else:
@@ -393,6 +434,6 @@ def chunk_file(md_path: str) -> list[dict[str, Any]]:
 
     # ── Edge case: no sections produced at all ───────────────────────────
     if not chunks and cleaned:
-        _emit(cleaned, name, "", "summary")
+        _emit(cleaned, name, "", "", "summary")
 
     return chunks
