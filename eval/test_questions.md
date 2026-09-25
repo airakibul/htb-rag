@@ -36,42 +36,42 @@ Question: What password cracking and hash dumping techniques are shown across HT
 
 ---
 **Q6** | Type: specific
-Question: How does AS-REP Roasting work and which HTB machines demonstrate it?
+Question: How does Kerberoasting work in Active Directory environments and which HTB machines demonstrate it?
 ---
 
 ---
 **Q7** | Type: specific
-Question: Which HTB machines use certipy and for what purpose?
+Question: What is MS17-010 (EternalBlue) and which HTB machines demonstrate its exploitation?
 ---
 
 ---
 **Q8** | Type: specific
-Question: What is CVE-2026-4480 and how was it exploited? Which machine demonstrates it?
+Question: What is CVE-2021-44228 (Log4Shell) and how was it exploited across HTB machines?
 ---
 
 ---
 **Q9** | Type: specific
-Question: How was WriteOwner permission abused? Which machine demonstrates it?
+Question: Which HTB machines demonstrate SQL injection exploited using sqlmap, and for what purpose?
 ---
 
 ---
 **Q10** | Type: specific
-Question: Explain the ESC9 ADCS attack step by step as demonstrated in HTB writeups.
+Question: How is Docker container breakout or escape achieved across HTB machines?
 ---
 
 ---
 **Q11** | Type: specific
-Question: What attack paths can BloodHound identify in Active Directory environments? Which machines show this?
+Question: How is SeImpersonatePrivilege abused using JuicyPotato or PrintSpoofer on Windows machines?
 ---
 
 ---
 **Q12** | Type: specific
-Question: Which HTB machines use the Shadow Credentials attack and how does it work?
+Question: Which HTB machines demonstrate the DCSync attack and how does it work?
 ---
 
 ---
 **Q13** | Type: specific
-Question: How was a Samba vulnerability exploited for remote code execution? Which machine?
+Question: How are SUID binaries and GTFOBins abused for Linux privilege escalation across HTB machines?
 ---
 
 ---
@@ -81,5 +81,6 @@ Question: Which HTB machines used WinRM (evil-winrm) for shell access and in wha
 
 ---
 **Q15** | Type: specific
-Question: How was GenericAll permission abused and on which HTB machine?
+Question: How was a Samba vulnerability exploited for remote code execution across HTB machines?
 ---
+

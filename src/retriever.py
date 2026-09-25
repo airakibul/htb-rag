@@ -31,8 +31,21 @@ QUERY_EXPANSIONS: dict[str, list[str]] = {
     "genericall": ["genericall", "powerview", "bloodyad", "net rpc password", "dacledit"],
     "writeowner": ["writeowner", "set-domainobjectowner", "powerview", "owneredit"],
     "as-rep": ["as-rep", "roasting", "getnpusers", "dont_req_preauth", "hashcat 18200"],
+    "kerberoast": ["kerberoast", "kerberoasting", "getuserspns", "spn", "hashcat 13100"],
     "bloodhound": ["bloodhound", "sharphound", "attack path", "shortest path"],
     "winrm": ["winrm", "evil-winrm", "remote management users"],
+    "ms17-010": ["ms17-010", "eternalblue", "cve-2017-0143", "smb-vuln-ms17-010"],
+    "eternalblue": ["eternalblue", "ms17-010", "cve-2017-0143", "smb-vuln-ms17-010"],
+    "sqlmap": ["sqlmap", "sqli", "sql injection", "--os-shell", "--dump"],
+    "docker": ["docker", "docker.sock", "container", "escape", "breakout"],
+    "potato": ["potato", "juicypotato", "printspoofer", "seimpersonateprivilege"],
+    "printspoofer": ["printspoofer", "seimpersonateprivilege", "spoolss"],
+    "juicypotato": ["juicypotato", "seimpersonateprivilege", "clsid"],
+    "dcsync": ["dcsync", "secretsdump", "ms-drsr", "getncchanges", "krbtgt", "ntds.dit"],
+    "log4j": ["log4j", "log4shell", "cve-2021-44228", "jndi", "ldap"],
+    "log4shell": ["log4shell", "log4j", "cve-2021-44228", "jndi", "ldap"],
+    "suid": ["suid", "gtfobins", "perm -4000", "setuid"],
+    "gtfobins": ["gtfobins", "suid", "perm -4000"],
 }
 
 
@@ -221,11 +234,12 @@ class HybridRetriever:
         windows_signals = [
             "windows", "adcs", "active directory", "bloodhound",
             "shadow credential", "as-rep", "winrm", "genericall",
-            "writedacl", "writeowner", "kerberos", "dcsync", "mimikatz",
+            "writedacl", "writeowner", "kerberos", "kerberoast", "dcsync", "mimikatz",
+            "ms17-010", "eternalblue", "potato", "printspoofer", "juicypotato",
         ]
         if any(sig in q for sig in windows_signals):
             os_val = "windows"
-        elif "linux" in q:
+        elif any(sig in q for sig in ["linux", "suid", "gtfobins", "docker"]):
             os_val = "linux"
         else:
             os_val = None
@@ -395,6 +409,102 @@ class HybridRetriever:
                 text_lower = (c.get("text", "") + " " + c.get("metadata", {}).get("breadcrumb", "")).lower()
                 if target_esc in text_lower:
                     c["rrf_score"] = c.get("rrf_score", 0.0) * 3.0
+                    filtered_merged.append(c)
+            if filtered_merged:
+                merged = filtered_merged
+
+        # 5. MS17-010 / EternalBlue check
+        if "ms17-010" in q_lower or "eternalblue" in q_lower:
+            ms17_terms = {"ms17-010", "eternalblue", "cve-2017-0143", "smb-vuln-ms17-010"}
+            filtered_merged = []
+            for c in merged:
+                text_lower = (c.get("text", "") + " " + c.get("metadata", {}).get("breadcrumb", "")).lower()
+                if any(term in text_lower for term in ms17_terms):
+                    c["rrf_score"] = c.get("rrf_score", 0.0) * 3.0
+                    filtered_merged.append(c)
+            if filtered_merged:
+                merged = filtered_merged
+
+        # 6. Log4Shell / CVE-2021-44228 check
+        if any(term in q_lower for term in ["log4j", "log4shell", "cve-2021-44228"]):
+            log4j_terms = {"log4j", "log4shell", "cve-2021-44228", "jndi"}
+            filtered_merged = []
+            for c in merged:
+                text_lower = (c.get("text", "") + " " + c.get("metadata", {}).get("breadcrumb", "")).lower()
+                if any(term in text_lower for term in log4j_terms):
+                    c["rrf_score"] = c.get("rrf_score", 0.0) * 3.0
+                    filtered_merged.append(c)
+            if filtered_merged:
+                merged = filtered_merged
+
+        # 7. Kerberoasting check
+        if "kerberoast" in q_lower:
+            kerb_terms = {"kerberoast", "getuserspns", "spn", "13100"}
+            filtered_merged = []
+            for c in merged:
+                text_lower = (c.get("text", "") + " " + c.get("metadata", {}).get("breadcrumb", "")).lower()
+                if any(term in text_lower for term in kerb_terms):
+                    c["rrf_score"] = c.get("rrf_score", 0.0) * 2.5
+                    filtered_merged.append(c)
+            if filtered_merged:
+                merged = filtered_merged
+
+        # 8. sqlmap check
+        if "sqlmap" in q_lower:
+            sqlmap_terms = {"sqlmap", "sqli", "sql injection"}
+            filtered_merged = []
+            for c in merged:
+                text_lower = (c.get("text", "") + " " + c.get("metadata", {}).get("breadcrumb", "")).lower()
+                if any(term in text_lower for term in sqlmap_terms):
+                    c["rrf_score"] = c.get("rrf_score", 0.0) * 2.5
+                    filtered_merged.append(c)
+            if filtered_merged:
+                merged = filtered_merged
+
+        # 9. Docker breakout check
+        if "docker" in q_lower and any(w in q_lower for w in ["escape", "breakout"]):
+            docker_terms = {"docker", "docker.sock", "container", "privileged", "cgroup"}
+            filtered_merged = []
+            for c in merged:
+                text_lower = (c.get("text", "") + " " + c.get("metadata", {}).get("breadcrumb", "")).lower()
+                if any(term in text_lower for term in docker_terms):
+                    c["rrf_score"] = c.get("rrf_score", 0.0) * 2.5
+                    filtered_merged.append(c)
+            if filtered_merged:
+                merged = filtered_merged
+
+        # 10. JuicyPotato / PrintSpoofer check
+        if any(w in q_lower for w in ["juicypotato", "printspoofer", "seimpersonate"]):
+            potato_terms = {"juicypotato", "printspoofer", "seimpersonate", "roguepotato", "sweetpotato"}
+            filtered_merged = []
+            for c in merged:
+                text_lower = (c.get("text", "") + " " + c.get("metadata", {}).get("breadcrumb", "")).lower()
+                if any(term in text_lower for term in potato_terms):
+                    c["rrf_score"] = c.get("rrf_score", 0.0) * 2.5
+                    filtered_merged.append(c)
+            if filtered_merged:
+                merged = filtered_merged
+
+        # 11. DCSync check
+        if "dcsync" in q_lower:
+            dcsync_terms = {"dcsync", "ds-replication", "getncchanges"}
+            filtered_merged = []
+            for c in merged:
+                text_lower = (c.get("text", "") + " " + c.get("metadata", {}).get("breadcrumb", "")).lower()
+                if any(term in text_lower for term in dcsync_terms):
+                    c["rrf_score"] = c.get("rrf_score", 0.0) * 2.5
+                    filtered_merged.append(c)
+            if filtered_merged:
+                merged = filtered_merged
+
+        # 12. SUID / GTFOBins check
+        if "suid" in q_lower or "gtfobins" in q_lower:
+            suid_terms = {"suid", "gtfobins", "perm -4000", "setuid"}
+            filtered_merged = []
+            for c in merged:
+                text_lower = (c.get("text", "") + " " + c.get("metadata", {}).get("breadcrumb", "")).lower()
+                if any(term in text_lower for term in suid_terms):
+                    c["rrf_score"] = c.get("rrf_score", 0.0) * 2.5
                     filtered_merged.append(c)
             if filtered_merged:
                 merged = filtered_merged
