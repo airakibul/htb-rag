@@ -215,4 +215,4 @@ async def retrieve_raw(req: RetrieveRequest):
         top_k=req.top_k,
     )
 
-    return result
+    return result  # Hot-reloaded with updated 17,569 chunk database

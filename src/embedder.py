@@ -77,9 +77,12 @@ class FallbackVectorCollection:
             }
         self._save()
 
-    def get(self, include: list[str] | None = None) -> dict[str, list[Any]]:
-        docs = [item["document"] for item in self._data.values()]
-        metas = [item["metadata"] for item in self._data.values()]
+    def get(self, include: list[str] | None = None, limit: int | None = None) -> dict[str, list[Any]]:
+        items = list(self._data.values())
+        if limit:
+            items = items[:limit]
+        docs = [item["document"] for item in items]
+        metas = [item["metadata"] for item in items]
         return {"documents": docs, "metadatas": metas}
 
     def query(
@@ -309,17 +312,18 @@ def _serialize_metadata(chunk: dict[str, Any]) -> dict[str, Any]:
 
 
 def _chunk_id(chunk: dict[str, Any]) -> str:
-    """Generate a deterministic ID for a chunk.
+    """Generate a deterministic, collision-free ID for a chunk.
 
-    Uses MD5 rather than Python's ``hash()`` so IDs are stable across
-    process restarts (Python randomises ``hash()`` by default).
+    Uses full text MD5 hash rather than Python's hash() so IDs are stable across
+    process restarts and never overwrite distinct sub-chunks within the same section.
     """
     source = chunk.get("source", "")
     h2     = chunk.get("h2", "")
     h3     = chunk.get("h3", "")
+    h4     = chunk.get("h4", "")
     text   = chunk.get("text", "")
-    sig    = hashlib.md5(text[:60].encode()).hexdigest()[:12]
-    return f"{source}__{h2}__{h3}__{sig}"
+    sig    = hashlib.md5(text.encode("utf-8")).hexdigest()[:16]
+    return f"{source}__{h2}__{h3}__{h4}__{sig}"
 
 
 def store_chunks(
