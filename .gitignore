@@ -220,10 +220,8 @@ __marimo__/
 # HTB RAG Project Specific
 .env
 db/
-graph/
 cache/
 scratch/
-eval/results.md
-eval/answers_generated.md
 raw/
+
 

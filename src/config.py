@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-RAW_DIR = os.getenv("RAW_DIR", r"c:\Brain Station 23\htb-wiki\raw")
+RAW_DIR = os.getenv("RAW_DIR", "./raw")
 CHROMA_DIR = "./db/chroma"
 GRAPH_PATH = "./graph/htb_graph.json"
 
