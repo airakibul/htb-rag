@@ -7,6 +7,9 @@ and structural (NetworkX graph) signals using Reciprocal Rank Fusion.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+import hashlib
+import logging
 import re
 from typing import Any
 
@@ -15,6 +18,8 @@ from rank_bm25 import BM25Okapi
 from src.config import TOP_K
 from src.embedder import embed_query, get_all_documents, get_collection
 from src.graph_builder import load_graph, query_graph
+
+logger = logging.getLogger(__name__)
 
 STOPWORDS: set[str] = {
     "what", "are", "the", "common", "across", "machines", "machine",
@@ -49,11 +54,195 @@ QUERY_EXPANSIONS: dict[str, list[str]] = {
 }
 
 
+@dataclass
+class TechniqueFilter:
+    """Declarative technique-specific discriminative filter."""
+    trigger_terms: list[str] = field(default_factory=list)      # query must contain ANY of these
+    trigger_all: bool = False                                    # if True, query must contain ALL trigger_terms
+    trigger_regex: str | None = None                             # regex pattern to match and extract dynamic term
+    compound_trigger: list[str] = field(default_factory=list)    # if set, query must also contain at least one of these
+    boost_terms: set[str] = field(default_factory=set)           # chunks matching these get boosted
+    boost_factor: float = 2.5                                    # score multiplier for matching chunks
+    filter_non_matching: bool = True                             # if True, remove chunks that DON'T match boost_terms
+    exclude_terms: set[str] = field(default_factory=set)         # chunks with ONLY these (and no boost_terms) are removed
+    exclude_os: str | None = None                                # skip chunks with this OS value
+    recon_exclusion_terms: set[str] = field(default_factory=set) # pure-recon indicator terms to exclude
+    require_any: set[str] = field(default_factory=set)           # chunk must mention at least one of these to survive
+
+
+TECHNIQUE_FILTERS: list[TechniqueFilter] = [
+    # 1. WriteOwner strict discriminative check
+    TechniqueFilter(
+        trigger_terms=["writeowner"],
+        boost_terms={"writeowner", "owneredit", "set-domainobjectowner"},
+        boost_factor=2.5,
+        filter_non_matching=True,
+        exclude_terms={"genericall", "writedacl", "genericwrite"},
+    ),
+    # 2. Samba RCE strict discriminative check
+    TechniqueFilter(
+        trigger_terms=["samba"],
+        compound_trigger=["rce", "remote code execution", "exploit"],
+        boost_terms={
+            "cve-2007-2447", "usermap_script", "sambacry", "cve-2017-7494",
+            "exploit", "command execution", "remote code", "metasploit", "payload",
+        },
+        boost_factor=2.5,
+        filter_non_matching=True,
+        exclude_os="windows",
+        require_any={"samba", "smbd", "sambacry"},
+        recon_exclusion_terms={
+            "smbclient -l", "null session", "enum4linux", "shares listing", "listing shares",
+        },
+    ),
+    # 3. Password Cracking / Hash Dumping check (boost only, keep all chunks)
+    TechniqueFilter(
+        trigger_terms=["hash dump", "password cracking", "hashcat", "mimikatz", "secretsdump"],
+        boost_terms={
+            "secretsdump", "mimikatz", "hashcat", "john", "ntds.dit", "sam",
+            "as-rep", "kerberoast", "gpp-decrypt",
+        },
+        boost_factor=1.6,
+        filter_non_matching=False,
+    ),
+    # 4. ESC specific sub-technique check
+    TechniqueFilter(
+        trigger_regex=r"\b(esc\d+)\b",
+        boost_factor=3.0,
+        filter_non_matching=True,
+    ),
+    # 5. MS17-010 / EternalBlue check
+    TechniqueFilter(
+        trigger_terms=["ms17-010", "eternalblue"],
+        boost_terms={"ms17-010", "eternalblue", "cve-2017-0143", "smb-vuln-ms17-010"},
+        boost_factor=3.0,
+    ),
+    # 6. Log4Shell / CVE-2021-44228 check
+    TechniqueFilter(
+        trigger_terms=["log4j", "log4shell", "cve-2021-44228"],
+        boost_terms={"log4j", "log4shell", "cve-2021-44228", "jndi"},
+        boost_factor=3.0,
+    ),
+    # 7. Kerberoasting check
+    TechniqueFilter(
+        trigger_terms=["kerberoast"],
+        boost_terms={"kerberoast", "getuserspns", "spn", "13100"},
+        boost_factor=2.5,
+    ),
+    # 8. sqlmap check
+    TechniqueFilter(
+        trigger_terms=["sqlmap"],
+        boost_terms={"sqlmap", "sqli", "sql injection"},
+        boost_factor=2.5,
+    ),
+    # 9. Docker breakout check
+    TechniqueFilter(
+        trigger_terms=["docker"],
+        compound_trigger=["escape", "breakout"],
+        boost_terms={"docker", "docker.sock", "container", "privileged", "cgroup"},
+        boost_factor=2.5,
+    ),
+    # 10. JuicyPotato / PrintSpoofer check
+    TechniqueFilter(
+        trigger_terms=["juicypotato", "printspoofer", "seimpersonate"],
+        boost_terms={"juicypotato", "printspoofer", "seimpersonate", "roguepotato", "sweetpotato"},
+        boost_factor=2.5,
+    ),
+    # 11. DCSync check
+    TechniqueFilter(
+        trigger_terms=["dcsync"],
+        boost_terms={"dcsync", "ds-replication", "getncchanges"},
+        boost_factor=2.5,
+    ),
+    # 12. SUID / GTFOBins check
+    TechniqueFilter(
+        trigger_terms=["suid", "gtfobins"],
+        boost_terms={"suid", "gtfobins", "perm -4000", "setuid"},
+        boost_factor=2.5,
+    ),
+]
+
+
+def _apply_technique_filters(
+    merged: list[dict[str, Any]],
+    q_lower: str,
+) -> list[dict[str, Any]]:
+    """Apply all technique-specific discriminative filters from TECHNIQUE_FILTERS config."""
+    for tf in TECHNIQUE_FILTERS:
+        dynamic_boost_terms = set(tf.boost_terms)
+
+        # 1. Regex trigger check (e.g. for ESC sub-techniques like esc1, esc8)
+        if tf.trigger_regex:
+            match = re.search(tf.trigger_regex, q_lower)
+            if not match:
+                continue
+            target_val = match.group(1).lower()
+            dynamic_boost_terms.add(target_val)
+
+        # 2. Term trigger check
+        elif tf.trigger_terms:
+            if tf.trigger_all:
+                if not all(t in q_lower for t in tf.trigger_terms):
+                    continue
+            else:
+                if not any(t in q_lower for t in tf.trigger_terms):
+                    continue
+        else:
+            continue
+
+        # 3. Compound trigger check (e.g. docker + escape/breakout, samba + rce/exploit)
+        if tf.compound_trigger:
+            if not any(w in q_lower for w in tf.compound_trigger):
+                continue
+
+        # 4. Filter and boost chunks
+        filtered: list[dict[str, Any]] = []
+        for c in merged:
+            text_str = c.get("text", "")
+            bc_str = c.get("metadata", {}).get("breadcrumb", "")
+            text_lower = text_str.lower()
+            combined_lower = f"{text_lower} {bc_str.lower()}"
+
+            # OS exclusion (e.g. skip Windows chunks for Samba RCE)
+            if tf.exclude_os and c.get("metadata", {}).get("os", "").lower() == tf.exclude_os:
+                continue
+
+            # Must mention at least one term from require_any
+            if tf.require_any and not any(t in combined_lower for t in tf.require_any):
+                continue
+
+            has_boost = any(t in combined_lower for t in dynamic_boost_terms)
+
+            # Recon exclusion (e.g. Samba recon commands when looking for RCE)
+            if tf.recon_exclusion_terms:
+                is_pure_recon = any(recon in text_lower for recon in tf.recon_exclusion_terms) and not has_boost
+                if is_pure_recon:
+                    continue
+
+            # Boost matching chunks
+            if has_boost:
+                c["rrf_score"] = c.get("rrf_score", 0.0) * tf.boost_factor
+                filtered.append(c)
+            elif not tf.filter_non_matching:
+                # Boost-only mode: keep all chunks
+                filtered.append(c)
+            elif tf.exclude_terms:
+                # Exclude only if chunk has exclude_terms without having boost_terms
+                if not any(term in combined_lower for term in tf.exclude_terms):
+                    filtered.append(c)
+
+        if filtered:
+            merged = filtered
+
+    return merged
+
+
 def _compute_lexical_density(query_terms: list[str], text: str, breadcrumb: str) -> float:
     """Compute exact term match density in breadcrumb and text body."""
     combined = f"{breadcrumb} {breadcrumb} {text}".lower()
     matches = sum(1 for term in query_terms if term in combined)
     return matches / max(len(query_terms), 1)
+
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -81,11 +270,12 @@ class HybridRetriever:
         # Knowledge graph
         self.graph = load_graph()
 
-        print(
+        logger.info(
             f"🔎 HybridRetriever ready  "
             f"({len(self.docs)} docs, "
             f"{self.graph.number_of_nodes()} graph nodes)"
         )
+
 
     # ── BM25 (lexical) ──────────────────────────────────────────────────
 
@@ -182,8 +372,9 @@ class HybridRetriever:
 
         for result_list in (bm25_results, vector_results):
             for item in result_list:
-                key = item["text"][:100]
+                key = hashlib.md5(item["text"].encode("utf-8")).hexdigest()
                 scores[key] = scores.get(key, 0.0) + 1.0 / (k + item["rank"])
+
                 # Keep the richer metadata version
                 if key not in doc_map:
                     doc_map[key] = item
@@ -351,163 +542,9 @@ class HybridRetriever:
                 if src in relevant_machines:
                     chunk["rrf_score"] = chunk.get("rrf_score", 0.0) * 1.5
 
-        # ── Specific Technique Discriminative Filters ───────────────────────
-        # 1. WriteOwner strict discriminative check
-        if "writeowner" in q_lower:
-            writeowner_terms = {"writeowner", "owneredit", "set-domainobjectowner"}
-            filtered_merged = []
-            for c in merged:
-                text_lower = (c.get("text", "") + " " + c.get("metadata", {}).get("breadcrumb", "")).lower()
-                # Strongly penalize chunks that only talk about GenericAll/WriteDACL without mentioning owner
-                if any(term in text_lower for term in writeowner_terms):
-                    c["rrf_score"] = c.get("rrf_score", 0.0) * 2.5
-                    filtered_merged.append(c)
-                elif not any(term in text_lower for term in ["genericall", "writedacl", "genericwrite"]):
-                    filtered_merged.append(c)
-            if filtered_merged:
-                merged = filtered_merged
+        # ── Specific Technique Discriminative Filters (config-driven) ───────
+        merged = _apply_technique_filters(merged, q_lower)
 
-        # 2. Samba RCE strict discriminative check
-        if "samba" in q_lower and any(w in q_lower for w in ["rce", "remote code execution", "exploit"]):
-            samba_rce_terms = {"cve-2007-2447", "usermap_script", "sambacry", "cve-2017-7494", "exploit", "command execution", "remote code", "metasploit", "payload"}
-            recon_indicators = {"smbclient -l", "null session", "enum4linux", "shares listing", "listing shares"}
-            filtered_merged = []
-            for c in merged:
-                text_lower = c.get("text", "").lower()
-                bc_lower = c.get("metadata", {}).get("breadcrumb", "").lower()
-                combined_lower = text_lower + " " + bc_lower
-                # Must actually be about samba
-                if not any(term in combined_lower for term in ["samba", "smbd", "sambacry"]):
-                    continue
-                # Skip Windows OS chunks for Samba RCE
-                if c.get("metadata", {}).get("os", "").lower() == "windows":
-                    continue
-                has_rce = any(term in combined_lower for term in samba_rce_terms)
-                is_pure_recon = any(recon in text_lower for recon in recon_indicators) and not has_rce
-                if has_rce and not is_pure_recon:
-                    c["rrf_score"] = c.get("rrf_score", 0.0) * 2.5
-                    filtered_merged.append(c)
-                elif not is_pure_recon:
-                    filtered_merged.append(c)
-            if filtered_merged:
-                merged = filtered_merged
-
-        # 3. Password Cracking / Hash Dumping check
-        if any(w in q_lower for w in ["hash dump", "password cracking", "hashcat", "mimikatz", "secretsdump"]):
-            hash_terms = {"secretsdump", "mimikatz", "hashcat", "john", "ntds.dit", "sam", "as-rep", "kerberoast", "gpp-decrypt"}
-            for c in merged:
-                text_lower = c.get("text", "").lower()
-                if any(term in text_lower for term in hash_terms):
-                    c["rrf_score"] = c.get("rrf_score", 0.0) * 1.6
-
-        # 4. ESC specific sub-technique check
-        esc_match = re.search(r"\b(esc\d+)\b", q_lower)
-        if esc_match:
-            target_esc = esc_match.group(1).lower()
-            filtered_merged = []
-            for c in merged:
-                text_lower = (c.get("text", "") + " " + c.get("metadata", {}).get("breadcrumb", "")).lower()
-                if target_esc in text_lower:
-                    c["rrf_score"] = c.get("rrf_score", 0.0) * 3.0
-                    filtered_merged.append(c)
-            if filtered_merged:
-                merged = filtered_merged
-
-        # 5. MS17-010 / EternalBlue check
-        if "ms17-010" in q_lower or "eternalblue" in q_lower:
-            ms17_terms = {"ms17-010", "eternalblue", "cve-2017-0143", "smb-vuln-ms17-010"}
-            filtered_merged = []
-            for c in merged:
-                text_lower = (c.get("text", "") + " " + c.get("metadata", {}).get("breadcrumb", "")).lower()
-                if any(term in text_lower for term in ms17_terms):
-                    c["rrf_score"] = c.get("rrf_score", 0.0) * 3.0
-                    filtered_merged.append(c)
-            if filtered_merged:
-                merged = filtered_merged
-
-        # 6. Log4Shell / CVE-2021-44228 check
-        if any(term in q_lower for term in ["log4j", "log4shell", "cve-2021-44228"]):
-            log4j_terms = {"log4j", "log4shell", "cve-2021-44228", "jndi"}
-            filtered_merged = []
-            for c in merged:
-                text_lower = (c.get("text", "") + " " + c.get("metadata", {}).get("breadcrumb", "")).lower()
-                if any(term in text_lower for term in log4j_terms):
-                    c["rrf_score"] = c.get("rrf_score", 0.0) * 3.0
-                    filtered_merged.append(c)
-            if filtered_merged:
-                merged = filtered_merged
-
-        # 7. Kerberoasting check
-        if "kerberoast" in q_lower:
-            kerb_terms = {"kerberoast", "getuserspns", "spn", "13100"}
-            filtered_merged = []
-            for c in merged:
-                text_lower = (c.get("text", "") + " " + c.get("metadata", {}).get("breadcrumb", "")).lower()
-                if any(term in text_lower for term in kerb_terms):
-                    c["rrf_score"] = c.get("rrf_score", 0.0) * 2.5
-                    filtered_merged.append(c)
-            if filtered_merged:
-                merged = filtered_merged
-
-        # 8. sqlmap check
-        if "sqlmap" in q_lower:
-            sqlmap_terms = {"sqlmap", "sqli", "sql injection"}
-            filtered_merged = []
-            for c in merged:
-                text_lower = (c.get("text", "") + " " + c.get("metadata", {}).get("breadcrumb", "")).lower()
-                if any(term in text_lower for term in sqlmap_terms):
-                    c["rrf_score"] = c.get("rrf_score", 0.0) * 2.5
-                    filtered_merged.append(c)
-            if filtered_merged:
-                merged = filtered_merged
-
-        # 9. Docker breakout check
-        if "docker" in q_lower and any(w in q_lower for w in ["escape", "breakout"]):
-            docker_terms = {"docker", "docker.sock", "container", "privileged", "cgroup"}
-            filtered_merged = []
-            for c in merged:
-                text_lower = (c.get("text", "") + " " + c.get("metadata", {}).get("breadcrumb", "")).lower()
-                if any(term in text_lower for term in docker_terms):
-                    c["rrf_score"] = c.get("rrf_score", 0.0) * 2.5
-                    filtered_merged.append(c)
-            if filtered_merged:
-                merged = filtered_merged
-
-        # 10. JuicyPotato / PrintSpoofer check
-        if any(w in q_lower for w in ["juicypotato", "printspoofer", "seimpersonate"]):
-            potato_terms = {"juicypotato", "printspoofer", "seimpersonate", "roguepotato", "sweetpotato"}
-            filtered_merged = []
-            for c in merged:
-                text_lower = (c.get("text", "") + " " + c.get("metadata", {}).get("breadcrumb", "")).lower()
-                if any(term in text_lower for term in potato_terms):
-                    c["rrf_score"] = c.get("rrf_score", 0.0) * 2.5
-                    filtered_merged.append(c)
-            if filtered_merged:
-                merged = filtered_merged
-
-        # 11. DCSync check
-        if "dcsync" in q_lower:
-            dcsync_terms = {"dcsync", "ds-replication", "getncchanges"}
-            filtered_merged = []
-            for c in merged:
-                text_lower = (c.get("text", "") + " " + c.get("metadata", {}).get("breadcrumb", "")).lower()
-                if any(term in text_lower for term in dcsync_terms):
-                    c["rrf_score"] = c.get("rrf_score", 0.0) * 2.5
-                    filtered_merged.append(c)
-            if filtered_merged:
-                merged = filtered_merged
-
-        # 12. SUID / GTFOBins check
-        if "suid" in q_lower or "gtfobins" in q_lower:
-            suid_terms = {"suid", "gtfobins", "perm -4000", "setuid"}
-            filtered_merged = []
-            for c in merged:
-                text_lower = (c.get("text", "") + " " + c.get("metadata", {}).get("breadcrumb", "")).lower()
-                if any(term in text_lower for term in suid_terms):
-                    c["rrf_score"] = c.get("rrf_score", 0.0) * 2.5
-                    filtered_merged.append(c)
-            if filtered_merged:
-                merged = filtered_merged
 
         # ── OS Enforcement for Broad Queries ────────────────────────────────
         # When intent detects a specific OS (e.g., "windows" or "linux"),
@@ -545,7 +582,13 @@ class HybridRetriever:
 
         merged.sort(key=lambda x: x.get("rrf_score", 0.0), reverse=True)
 
+        # ── Cross-Encoder Re-Ranking ──────────────────────────────────────
+        from src.reranker import rerank
+        rerank_pool = min(len(merged), effective_top_k * 3)
+        merged[:rerank_pool] = rerank(query, merged[:rerank_pool])
+
         # Source Diversification: allow max 1 chunk per machine for broad queries (max 2 for specific)
+
         max_per_machine = 1 if is_broad else 2
         diversified: list[dict[str, Any]] = []
         machine_counts: dict[str, int] = {}

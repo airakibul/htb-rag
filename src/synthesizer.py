@@ -1,5 +1,5 @@
 """
-synthesizer.py – Cited answer generation via Groq (llama-3.3-70b-versatile).
+synthesizer.py – Cited answer generation via Groq (openai/gpt-oss-120b).
 
 Formats retrieved context, prepends graph findings when available, and
 calls the Groq chat API with a strict cybersecurity system prompt.
@@ -7,11 +7,14 @@ calls the Groq chat API with a strict cybersecurity system prompt.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import groq
 
 from src.config import GROQ_API_KEY, GROQ_LLM_MODEL
+
+logger = logging.getLogger(__name__)
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  System prompt

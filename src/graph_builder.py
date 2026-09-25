@@ -7,7 +7,8 @@ Edge rels  : uses, exploits, belongs_to, os
 
 from __future__ import annotations
 
-import pickle
+import json
+import logging
 import re
 import sys
 from pathlib import Path
@@ -20,8 +21,12 @@ if hasattr(sys.stdout, "reconfigure"):
         pass
 
 import networkx as nx
+from networkx.readwrite import node_link_data, node_link_graph
 
 from src.config import GRAPH_PATH
+
+
+logger = logging.getLogger(__name__)
 
 # ── Category keyword mapping ────────────────────────────────────────────────
 
@@ -174,24 +179,23 @@ def build_graph(all_chunks: list[dict[str, Any]]) -> nx.DiGraph:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def save_graph(graph: nx.DiGraph) -> None:
-    """Pickle the graph to :pydata:`GRAPH_PATH`."""
     path = Path(GRAPH_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "wb") as f:
-        pickle.dump(graph, f)
-    print(
+    data = node_link_data(graph)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    logger.info(
         f"🔗 Graph saved → {path}  "
         f"({graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges)"
     )
 
 
 def load_graph() -> nx.DiGraph:
-    """Load the graph from :pydata:`GRAPH_PATH`, or return an empty DiGraph."""
     path = Path(GRAPH_PATH)
     if path.exists():
-        with open(path, "rb") as f:
-            return pickle.load(f)                  # noqa: S301
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return node_link_graph(data, directed=True)
     return nx.DiGraph()
+
 
 
 # ═════════════════════════════════════════════════════════════════════════════

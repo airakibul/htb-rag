@@ -20,6 +20,7 @@ if hasattr(sys.stdout, "reconfigure"):
     except Exception:
         pass
 
+import logging
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -27,6 +28,9 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
+
 
 from src.graph_builder import (
     get_cves_for_machine,
@@ -73,9 +77,17 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
     retriever = HybridRetriever()
 
     if not retriever.docs:
-        print("⚠️  No chunks indexed. Run: python -m src.ingest")
+        logger.warning("⚠️  No chunks indexed. Run: python -m src.ingest")
+
+    # Pre-warm cross-encoder (lazy load on first use is also fine)
+    try:
+        from src.reranker import _get_model
+        _get_model()
+    except Exception:
+        pass  # Non-critical — will lazy-load on first query
 
     _state["retriever"] = retriever
+
     yield
     _state.clear()
 
@@ -215,4 +227,4 @@ async def retrieve_raw(req: RetrieveRequest):
         top_k=req.top_k,
     )
 
-    return result  # Hot-reloaded with updated 17,569 chunk database
+    return result

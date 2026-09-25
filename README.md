@@ -15,7 +15,7 @@ query ──► HybridRetriever
             ├── BM25 (lexical)
             ├── ChromaDB (Gemini semantic)
             └── NetworkX (graph traversal)
-          └──► Synthesizer (Groq LLaMA 70B)
+          └──► Synthesizer (Groq GPT-OSS 120B)
           └──► FastAPI /query response
 ```
 
@@ -23,9 +23,9 @@ query ──► HybridRetriever
 
 | Component       | Tool                         | Purpose         |
 |-----------------|------------------------------|-----------------|
-| Embedding       | Gemini text-embedding-004    | Semantic search |
-| Vision          | Gemini gemini-1.5-flash      | Image describe  |
-| LLM             | Groq llama-3.3-70b-versatile | Answer synth    |
+| Embedding       | Gemini gemini-embedding-001  | Semantic search |
+| Vision          | Gemini gemini-2.5-flash      | Image describe  |
+| LLM             | Groq openai/gpt-oss-120b     | Answer synth    |
 | Vector Store    | ChromaDB (local)             | Chunk storage   |
 | Knowledge Graph | NetworkX (local)             | Cross-machine   |
 | API             | FastAPI                      | Interface       |
@@ -48,6 +48,8 @@ Add-MpPreference -ExclusionPath "c:\Brain Station 23\htb-wiki\raw"
 ```bash
 pip install -r requirements.txt
 ```
+
+> **Note:** The first API query will download the cross-encoder reranking model (`ms-marco-MiniLM-L-6-v2`, ~80 MB) automatically via `sentence-transformers`.
 
 ### 4. Configure .env
 

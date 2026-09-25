@@ -12,6 +12,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 import time
 from pathlib import Path
@@ -32,6 +33,9 @@ from src import embedder
 from src.chunker import chunk_file
 from src.config import GEMINI_API_KEY, GROQ_API_KEY, RAW_DIR
 from src.graph_builder import build_graph, save_graph
+
+logger = logging.getLogger(__name__)
+
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -62,8 +66,8 @@ def _validate_keys() -> None:
         missing.append("GROQ_API_KEY")
 
     if missing:
-        print(f"❌ Missing API key(s): {', '.join(missing)}")
-        print("   → Set them in .env and try again.")
+        logger.error(f"❌ Missing API key(s): {', '.join(missing)}")
+        logger.error("   → Set them in .env and try again.")
         sys.exit(1)
 
 
@@ -71,10 +75,10 @@ def _validate_gemini() -> None:
     """Quick smoke-test of the Gemini Embedding API."""
     try:
         embedder.embed_texts(["test"])
-        print("✅ Gemini API validated")
+        logger.info("✅ Gemini API validated")
     except Exception as exc:
-        print(f"❌ Gemini API error: {exc}")
-        print("   → Check GEMINI_API_KEY in .env")
+        logger.error(f"❌ Gemini API error: {exc}")
+        logger.error("   → Check GEMINI_API_KEY in .env")
         sys.exit(1)
 
 
@@ -89,7 +93,7 @@ def _check_collection(is_single_file: bool = False) -> None:
             return
         resp = input(f"Collection has {count} chunks. Re-ingest? [y/N] ")
         if resp.strip().lower() != "y":
-            print("Aborted.")
+            logger.info("Aborted.")
             sys.exit(0)
 
 
@@ -101,21 +105,22 @@ def _get_files(single: str | None) -> list[Path]:
     """Return the list of ``.md`` files to ingest."""
     raw = Path(RAW_DIR)
     if not raw.exists():
-        print(f"❌ RAW_DIR not found: {raw}")
+        logger.error(f"❌ RAW_DIR not found: {raw}")
         sys.exit(1)
 
     if single:
         target = raw / single
         if not target.exists():
-            print(f"❌ File not found: {target}")
+            logger.error(f"❌ File not found: {target}")
             sys.exit(1)
         return [target]
 
     files = sorted(raw.glob("*.md"))
     if not files:
-        print(f"❌ No .md files found in {raw}")
+        logger.error(f"❌ No .md files found in {raw}")
         sys.exit(1)
     return files
+
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -138,12 +143,12 @@ def _store_with_retry(
             try:
                 embedder.store_chunks(group)
                 curr = min(start + group_size, total)
-                print(f"🚀 Overall progress: {curr}/{total} chunks ingested", flush=True)
+                logger.info(f"🚀 Overall progress: {curr}/{total} chunks ingested")
                 break
             except Exception as exc:
                 err_str = str(exc).lower()
                 if "429" in str(exc) or "rate" in err_str or "resource" in err_str:
-                    print("⏳ Rate limited — waiting 60 s before retry…", flush=True)
+                    logger.warning("⏳ Rate limited — waiting 60 s before retry…")
                     time.sleep(60)
                 else:
                     raise
@@ -171,11 +176,11 @@ def main() -> None:
     # ── 4. Disable image descriptions if requested ───────────────────────
     if args.skip_images:
         embedder.describe_image = lambda url: None      # noqa: ARG005
-        print("⏭️  Image descriptions disabled (--skip-images)")
+        logger.info("⏭️  Image descriptions disabled (--skip-images)")
 
     # ── 5. Discover files ────────────────────────────────────────────────
     files = _get_files(args.file)
-    print(f"\n📂 Found {len(files)} file(s) in {RAW_DIR}\n")
+    logger.info(f"📂 Found {len(files)} file(s) in {RAW_DIR}")
 
     # ── 6. Chunk every file ──────────────────────────────────────────────
     all_chunks: list[dict] = []
@@ -184,33 +189,31 @@ def main() -> None:
 
     for idx, md_path in enumerate(files, 1):
         try:
-            print(f"📄 [{idx}/{len(files)}] Ingesting {md_path.name}...")
+            logger.info(f"📄 [{idx}/{len(files)}] Ingesting {md_path.name}...")
             chunks = chunk_file(str(md_path))
             all_chunks.extend(chunks)
             processed += 1
         except (IOError, OSError):
-            print(f"⚠️  Skipped {md_path.name} (access denied)")
+            logger.warning(f"⚠️  Skipped {md_path.name} (access denied)")
             skipped += 1
 
-    print(f"\n🔢 Chunked {len(all_chunks)} chunks from {processed} files\n")
+    logger.info(f"🔢 Chunked {len(all_chunks)} chunks from {processed} files")
 
     # ── 7. Dry run → print stats and exit ────────────────────────────────
     if args.dry_run:
         elapsed = time.time() - t0
         mins, secs = divmod(int(elapsed), 60)
-        print("─── Dry-run summary ───────────────────────────")
-        print(f"  ✅ Files processed : {processed}")
-        print(f"  ⚠️  Files skipped  : {skipped}")
-        print(f"  📦 Total chunks   : {len(all_chunks)}")
-        print(f"  ⏱  Time taken     : {mins}m {secs:02d}s")
+        logger.info("─── Dry-run summary ───────────────────────────")
+        logger.info(f"  ✅ Files processed : {processed}")
+        logger.info(f"  ⚠️  Files skipped  : {skipped}")
+        logger.info(f"  📦 Total chunks   : {len(all_chunks)}")
+        logger.info(f"  ⏱  Time taken     : {mins}m {secs:02d}s")
         if all_chunks:
-            print("\n─── Sample Chunks (Up to 3) ───────────────────")
+            logger.info("─── Sample Chunks (Up to 3) ───────────────────")
             for i, chunk in enumerate(all_chunks[:3], 1):
                 meta = chunk.get("metadata", {})
                 snippet = chunk.get("text", "")[:120].replace("\n", " ")
-                print(f"\n[Sample {i}]")
-                print(f"  Metadata: {meta}")
-                print(f"  Text Snippet: {snippet}...")
+                logger.info(f"[Sample {i}] Metadata: {meta} | Snippet: {snippet}...")
         return
 
     # ── 8. Store chunks in ChromaDB ──────────────────────────────────────
@@ -230,12 +233,13 @@ def main() -> None:
     elapsed = time.time() - t0
     mins, secs = divmod(int(elapsed), 60)
 
-    print("\n═══ Ingestion complete ════════════════════════")
-    print(f"  ✅ Files processed : {processed}")
-    print(f"  ⚠️  Files skipped  : {skipped}")
-    print(f"  📦 Total chunks   : {len(all_chunks)}")
-    print(f"  🔗 Graph nodes    : {graph.number_of_nodes()}")
-    print(f"  ⏱  Time taken     : {mins}m {secs:02d}s")
+    logger.info("═══ Ingestion complete ════════════════════════")
+    logger.info(f"  ✅ Files processed : {processed}")
+    logger.info(f"  ⚠️  Files skipped  : {skipped}")
+    logger.info(f"  📦 Total chunks   : {len(all_chunks)}")
+    logger.info(f"  🔗 Graph nodes    : {graph.number_of_nodes()}")
+    logger.info(f"  ⏱  Time taken     : {mins}m {secs:02d}s")
+
 
 
 if __name__ == "__main__":

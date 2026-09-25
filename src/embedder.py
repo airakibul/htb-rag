@@ -1,7 +1,7 @@
 """
 embedder.py – Embedding & vision via Google Gemini, stored in ChromaDB.
 
-Uses ``text-embedding-004`` for text embeddings and ``gemini-1.5-flash``
+Uses ``gemini-embedding-001`` for text embeddings and ``gemini-2.5-flash``
 for image descriptions.  ChromaDB is the persistent vector store.
 """
 
@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import logging
 import re
 import time
 from pathlib import Path
@@ -20,6 +21,8 @@ import google.generativeai as genai
 import numpy as np
 import requests
 from PIL import Image
+
+logger = logging.getLogger(__name__)
 
 from src.config import (
     CHROMA_DIR,
@@ -139,11 +142,6 @@ class FallbackVectorCollection:
 #  Text Embedding
 # ═════════════════════════════════════════════════════════════════════════════
 
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  Text Embedding
-# ═════════════════════════════════════════════════════════════════════════════
-
 def _local_hash_embedding(text: str, dim: int = 768) -> list[float]:
     """Deterministic 768-dim feature hash vectorizer fallback."""
     tokens = re.findall(r"\w+", text.lower())
@@ -253,8 +251,9 @@ def describe_image(url: str) -> str | None:
         return description
 
     except Exception as exc:                       # noqa: BLE001
-        print(f"⚠️  describe_image failed for {url}: {exc}")
+        logger.warning(f"⚠️  describe_image failed for {url}: {exc}")
         return None
+
 
 
 def is_decorative_image(url: str) -> bool:
@@ -376,7 +375,8 @@ def store_chunks(
 
         stored = min(start + EMBED_BATCH_SIZE, total)
         if stored % 100 < EMBED_BATCH_SIZE or stored == total:
-            print(f"📦 Stored {stored}/{total} chunks...")
+            logger.info(f"📦 Stored {stored}/{total} chunks...")
+
 
 
 # ═════════════════════════════════════════════════════════════════════════════

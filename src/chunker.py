@@ -7,11 +7,14 @@ metadata extracted from document structure, headings, and content.
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any
 
 from src.config import CHUNK_TOKEN_LIMIT
+
+logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
