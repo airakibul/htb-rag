@@ -144,6 +144,8 @@ def synthesize(
         )
         content = response.choices[0].message.content
         answer_text = (content or "").strip()
+        if not answer_text:
+            raise RuntimeError("Empty response from primary model")
     except Exception as exc:
         err_msg = str(exc).lower()
         if "429" in str(exc) or "rate" in err_msg or "limit" in err_msg:

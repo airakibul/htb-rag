@@ -66,12 +66,14 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "injection", "burp", "sqlmap", "ssti", "nosql",
     ],
     "Linux-Privesc": [
-        "linux privilege escalation", "linux privesc",
+        "linux privilege escalation", "linux privesc", "linux priv esc",
+        "privilege escalation", "privesc",
         "sudo", "suid", "cron", "capabilities", "gtfobins", "dirtycow",
         "pwnkit", "no_root_squash", "path hijack", "cap_setuid",
     ],
     "Windows-Privesc": [
-        "windows privilege escalation", "windows privesc",
+        "windows privilege escalation", "windows privesc", "windows priv esc",
+        "privilege escalation", "privesc",
         "token", "potato", "juicypotato", "printspoofer", "godpotato",
         "uac", "alwaysinstallelevated", "seimpersonate", "unquoted service",
         "dll hijack", "sam hive", "system hive", "winpeas",
@@ -296,6 +298,44 @@ TOOL_CATEGORIES: dict[str, str] = {
     "winpeas": "Windows-Privesc",
 }
 
+# ── Curated aliases for CVE and Tool nodes ──────────────────────────────────
+
+KNOWN_CVE_ALIASES: dict[str, list[str]] = {
+    "CVE-2017-0143": ["ms17-010", "eternalblue", "smb-vuln-ms17-010"],
+    "CVE-2021-44228": ["log4shell", "log4j", "jndi:ldap", "marshalsec"],
+    "CVE-2007-2447": ["usermap_script", "samba rce", "sambacry"],
+    "CVE-2017-7494": ["sambacry", "samba rce"],
+    "CVE-2021-4034": ["pwnkit"],
+    "CVE-2016-5195": ["dirtycow"],
+    "CVE-2014-6271": ["shellshock"],
+    "CVE-2019-14287": ["sudo bypass"],
+}
+
+KNOWN_TOOL_ALIASES: dict[str, list[str]] = {
+    "printspoofer": ["seimpersonate", "spoolss"],
+    "juicypotato": ["seimpersonate", "clsid", "potato"],
+    "godpotato": ["seimpersonate", "potato"],
+    "sweetpotato": ["seimpersonate", "potato"],
+    "roguepotato": ["seimpersonate", "potato"],
+    "certipy": ["adcs", "esc1", "esc8", "esc9", "certificate template"],
+    "certify": ["adcs", "certificate template"],
+    "rubeus": ["kerberos", "kerberoast", "as-rep", "tgt", "tgs"],
+    "getnpusers": ["as-rep", "asrep", "roasting", "dont_req_preauth"],
+    "getuserspns": ["kerberoast", "kerberoasting", "spn"],
+    "secretsdump": ["dcsync", "ntds.dit", "hash dump", "sam dump"],
+    "mimikatz": ["sekurlsa", "logonpasswords", "hash dump", "lsass"],
+    "evil-winrm": ["winrm", "remote management users", "5985", "5986"],
+    "sqlmap": ["sqli", "sql injection", "--os-shell"],
+    "sharphound": ["bloodhound", "attack path"],
+    "bloodhound": ["sharphound", "attack path"],
+    "hashcat": ["password cracking", "hash dump"],
+    "john": ["john the ripper", "password cracking"],
+    "pywhisker": ["shadow credential", "msds-keycredentiallink"],
+    "whisker": ["shadow credential", "msds-keycredentiallink"],
+    "linpeas": ["privilege escalation", "privesc"],
+    "winpeas": ["privilege escalation", "privesc"],
+}
+
 # ── Technique heading keywords (for raw heading extraction) ─────────────────
 
 TECHNIQUE_KEYWORDS: list[str] = [
@@ -410,16 +450,26 @@ def build_graph(all_chunks: list[dict[str, Any]]) -> nx.DiGraph:
         # ── CVE nodes & edges (Direct machine → CVE) ─────────────────────
         for cve in cves:
             cve_up = cve.upper()
+            cve_aliases = KNOWN_CVE_ALIASES.get(cve_up, [])
             if cve_up not in G:
-                G.add_node(cve_up, type="cve")
+                G.add_node(cve_up, type="cve", aliases=cve_aliases)
+            else:
+                existing = G.nodes[cve_up].get("aliases", [])
+                if cve_aliases:
+                    G.nodes[cve_up]["aliases"] = sorted(set(existing + cve_aliases))
             if not G.has_edge(source, cve_up):
                 G.add_edge(source, cve_up, rel="exploits")
 
         # ── Tool nodes & edges ───────────────────────────────────────────
         for tool in tools:
             tool_clean = tool.lower().strip()
+            tool_aliases = KNOWN_TOOL_ALIASES.get(tool_clean, [])
             if tool_clean not in G:
-                G.add_node(tool_clean, type="tool")
+                G.add_node(tool_clean, type="tool", aliases=tool_aliases)
+            else:
+                existing = G.nodes[tool_clean].get("aliases", [])
+                if tool_aliases:
+                    G.nodes[tool_clean]["aliases"] = sorted(set(existing + tool_aliases))
             if not G.has_edge(source, tool_clean):
                 G.add_edge(source, tool_clean, rel="uses")
 
@@ -427,7 +477,7 @@ def build_graph(all_chunks: list[dict[str, Any]]) -> nx.DiGraph:
             if tool_clean in TOOL_CATEGORIES:
                 tcat = TOOL_CATEGORIES[tool_clean]
                 if tcat not in G:
-                    G.add_node(tcat, type="category")
+                    G.add_node(tcat, type="category", aliases=CATEGORY_KEYWORDS.get(tcat, []))
                 if not G.has_edge(tool_clean, tcat):
                     G.add_edge(tool_clean, tcat, rel="belongs_to")
 
@@ -451,8 +501,14 @@ def build_graph(all_chunks: list[dict[str, Any]]) -> nx.DiGraph:
                 hit = has_fallback and has_req
 
             if hit:
+                tech_patterns = tech_cfg.get("patterns", [])
+                tech_fallbacks = tech_cfg.get("fallback_patterns", [])
+                tech_aliases = sorted(set(tech_patterns + tech_fallbacks))
                 if tech_name not in G:
-                    G.add_node(tech_name, type="technique")
+                    G.add_node(tech_name, type="technique", aliases=tech_aliases)
+                else:
+                    existing = G.nodes[tech_name].get("aliases", [])
+                    G.nodes[tech_name]["aliases"] = sorted(set(existing + tech_aliases))
                 if not G.has_edge(source, tech_name):
                     G.add_edge(source, tech_name, rel="uses")
                     G.add_edge(source, tech_name, rel="demonstrates")
@@ -461,14 +517,14 @@ def build_graph(all_chunks: list[dict[str, Any]]) -> nx.DiGraph:
                 cat = tech_cfg.get("category")
                 if cat:
                     if cat not in G:
-                        G.add_node(cat, type="category")
+                        G.add_node(cat, type="category", aliases=CATEGORY_KEYWORDS.get(cat, []))
                     if not G.has_edge(tech_name, cat):
                         G.add_edge(tech_name, cat, rel="belongs_to")
 
                 sec_cat = tech_cfg.get("secondary_category")
                 if sec_cat:
                     if sec_cat not in G:
-                        G.add_node(sec_cat, type="category")
+                        G.add_node(sec_cat, type="category", aliases=CATEGORY_KEYWORDS.get(sec_cat, []))
                     if not G.has_edge(tech_name, sec_cat):
                         G.add_edge(tech_name, sec_cat, rel="belongs_to")
 
@@ -492,22 +548,27 @@ def build_graph(all_chunks: list[dict[str, Any]]) -> nx.DiGraph:
                 clean_head = target_heading.strip()
 
             if clean_head not in G:
-                G.add_node(clean_head, type="technique")
+                G.add_node(clean_head, type="technique", aliases=[clean_head.lower()])
             if not G.has_edge(source, clean_head):
                 G.add_edge(source, clean_head, rel="uses")
 
             # technique → exploits → cve
             for cve in cves:
                 cve_up = cve.upper()
+                cve_aliases = KNOWN_CVE_ALIASES.get(cve_up, [])
                 if cve_up not in G:
-                    G.add_node(cve_up, type="cve")
+                    G.add_node(cve_up, type="cve", aliases=cve_aliases)
+                else:
+                    existing = G.nodes[cve_up].get("aliases", [])
+                    if cve_aliases:
+                        G.nodes[cve_up]["aliases"] = sorted(set(existing + cve_aliases))
                 if not G.has_edge(clean_head, cve_up):
                     G.add_edge(clean_head, cve_up, rel="exploits")
 
             # technique → belongs_to → category
             for cat in _categorize(clean_head, h2, tools, os_val):
                 if cat not in G:
-                    G.add_node(cat, type="category")
+                    G.add_node(cat, type="category", aliases=CATEGORY_KEYWORDS.get(cat, []))
                 if not G.has_edge(clean_head, cat):
                     G.add_edge(clean_head, cat, rel="belongs_to")
 
@@ -613,47 +674,51 @@ def query_graph(
     """
     low = query.lower()
 
-    # ── Categories ───────────────────────────────────────────────────────
-    matched_categories: list[str] = [
-        cat for cat, keywords in CATEGORY_KEYWORDS.items()
-        if any(kw in low for kw in keywords)
-    ]
+    # ── Categories (matched by category name, node aliases, or CATEGORY_KEYWORDS) ─
+    matched_categories: list[str] = sorted({
+        node for node, data in graph.nodes(data=True)
+        if data.get("type") == "category" and (
+            node.lower() in low
+            or any(kw in low for kw in data.get("aliases", CATEGORY_KEYWORDS.get(node, [])))
+        )
+    })
+    # Filter out opposite OS category if an explicit OS is mentioned
+    if "windows" in low and "linux" not in low:
+        matched_categories = [c for c in matched_categories if c != "Linux-Privesc"]
+    elif "linux" in low and "windows" not in low:
+        matched_categories = [c for c in matched_categories if c != "Windows-Privesc"]
 
-    # Specific category overrides / intent alignments
-    if any(w in low for w in ["privilege escalation", "privesc"]):
-        if "windows" in low and "Windows-Privesc" not in matched_categories:
-            matched_categories.append("Windows-Privesc")
-        if "linux" in low and "Linux-Privesc" not in matched_categories:
-            matched_categories.append("Linux-Privesc")
-
-    if any(w in low for w in ["active directory", " ad ", "ad "]) and "Active Directory" not in matched_categories:
-        matched_categories.append("Active Directory")
-
-    if any(w in low for w in ["password cracking", "hash dumping", "hash dump", "cracking"]) and "Password Cracking" not in matched_categories:
-        matched_categories.append("Password Cracking")
-
-    if any(w in low for w in ["docker", "container escape", "container breakout"]) and "Container Escape" not in matched_categories:
-        matched_categories.append("Container Escape")
-
-    # ── Tools (tool nodes whose name appears in the query) ───────────────
+    # ── Tools (matched by name or aliases) ───────────────────────────────
     matched_tools: list[str] = sorted({
         node for node, data in graph.nodes(data=True)
-        if data.get("type") == "tool" and (f" {node} " in f" {low} " or node == low)
+        if data.get("type") == "tool" and (
+            f" {node.lower()} " in f" {low} " or node.lower() == low
+            or any(f" {alias.lower()} " in f" {low} " or alias.lower() == low for alias in data.get("aliases", []))
+        )
     })
 
-    # ── CVEs ─────────────────────────────────────────────────────────────
-    matched_cves: list[str] = sorted({
-        c.upper() for c in _CVE_RE.findall(query) if c.upper() in graph
-    })
-    if "ms17-010" in low and "CVE-2017-0143" in graph:
-        matched_cves.append("CVE-2017-0143")
+    # ── CVEs (matched by direct CVE regex, name, or aliases) ──────────────
+    cve_regex_matches = {c.upper() for c in _CVE_RE.findall(query) if c.upper() in graph}
+    cve_alias_matches = {
+        node for node, data in graph.nodes(data=True)
+        if data.get("type") == "cve" and (
+            node.lower() in low
+            or any(alias.lower() in low for alias in data.get("aliases", []))
+        )
+    }
+    matched_cves: list[str] = sorted(cve_regex_matches | cve_alias_matches)
 
-    # ── Techniques (direct name match or derived from category) ──────────
+    # ── Techniques (direct name match, word match, or aliases) ───────────
     direct_techniques: set[str] = set()
     for node, data in graph.nodes(data=True):
         if data.get("type") == "technique":
             node_low = node.lower()
-            if node_low in low or any(kw in low for kw in node_low.split() if len(kw) > 4):
+            aliases = [a.lower() for a in data.get("aliases", [])]
+            if (
+                node_low in low
+                or any(kw in low for kw in node_low.split() if len(kw) > 4)
+                or any(alias in low for alias in aliases)
+            ):
                 direct_techniques.add(node)
 
     category_techniques: set[str] = {
@@ -730,3 +795,41 @@ def query_graph(
         "matched_cves":       matched_cves,
         "relevant_machines":  sorted(machines),
     }
+
+
+def main() -> None:
+    """Rebuild and save the knowledge graph from ChromaDB documents."""
+    from src import embedder
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    logger.info("Reading chunks from ChromaDB...")
+    all_stored = embedder.get_all_documents()
+    if not all_stored:
+        logger.warning("No documents found in ChromaDB. Ensure ingestion has been run.")
+        return
+
+    full_chunks = []
+    for doc in all_stored:
+        c = dict(doc.get("metadata", {}))
+        c["text"] = doc.get("text", "")
+        full_chunks.append(c)
+
+    logger.info(f"Building knowledge graph from {len(full_chunks)} chunks...")
+    graph = build_graph(full_chunks)
+    save_graph(graph)
+
+    n_mach = sum(1 for _, d in graph.nodes(data=True) if d.get("type") == "machine")
+    n_tech = sum(1 for _, d in graph.nodes(data=True) if d.get("type") == "technique")
+    n_cve = sum(1 for _, d in graph.nodes(data=True) if d.get("type") == "cve")
+    n_tool = sum(1 for _, d in graph.nodes(data=True) if d.get("type") == "tool")
+    n_cat = sum(1 for _, d in graph.nodes(data=True) if d.get("type") == "category")
+    logger.info(
+        f"✅ Successfully rebuilt graph with {graph.number_of_nodes()} nodes "
+        f"({n_mach} machines, {n_tech} techniques, {n_cve} CVEs, {n_tool} tools, {n_cat} categories) "
+        f"and {graph.number_of_edges()} edges."
+    )
+
+
+if __name__ == "__main__":
+    main()
+
