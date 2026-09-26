@@ -1,8 +1,8 @@
 """
-graph_builder.py – Build a NetworkX knowledge graph from chunk metadata.
+graph_builder.py – Enriched NetworkX knowledge graph for HTB writeups.
 
-Node types : machine, technique, tool, cve, category
-Edge rels  : uses, exploits, belongs_to, os
+Node types : machine, technique, tool, cve, category, os, phase
+Edge rels  : uses, demonstrates, exploits, belongs_to, enables, os, has_phase
 """
 
 from __future__ import annotations
@@ -25,42 +25,281 @@ from networkx.readwrite import node_link_data, node_link_graph
 
 from src.config import GRAPH_PATH
 
-
 logger = logging.getLogger(__name__)
 
 # ── Category keyword mapping ────────────────────────────────────────────────
 
 CATEGORY_KEYWORDS: dict[str, list[str]] = {
     "ADCS": (
-        [f"esc{i}" for i in range(1, 16)]
-        + ["certipy", "certify", "certificate", "adcs", "template"]
+        [f"esc{i}" for i in range(1, 17)]
+        + [
+            "certipy", "certify", "certificate", "adcs", "template",
+            "certificate template", "ca enrollment",
+        ]
     ),
     "Kerberos": [
-        "as-rep", "kerberoast", "rubeus", "silver ticket",
-        "tgt", "tgs", "kerberos",
+        "as-rep", "asrep", "kerberoast", "kerberoasting", "rubeus",
+        "silver ticket", "golden ticket", "tgt", "tgs", "kerberos",
+        "getuserspns", "getnpusers", "kinit",
     ],
-    "AD": [
-        "bloodhound", "writeowner", "genericall", "writedacl",
-        "acl", "shadow credential",
+    "Active Directory": [
+        "active directory", "ad", "domain controller", "domain admin",
+        "bloodhound", "sharphound", "writeowner", "genericall", "writedacl",
+        "genericwrite", "acl", "shadow credential", "dcsync", "secretsdump",
+        "delegation", "rbcd", "unconstrained delegation", "constrained delegation",
+        "gpo abuse", "ntds.dit", "kerberoast", "as-rep", "adcs",
+    ],
+    "Password Cracking": [
+        "password cracking", "hash dumping", "hashcat", "john the ripper",
+        "john", "secretsdump", "mimikatz", "hash dump", "dumping hashes",
+        "ntds.dit", "sam dump", "cracking password", "hash",
+    ],
+    "Container Escape": [
+        "docker", "docker.sock", "container", "escape", "breakout",
+        "cgroup", "lxd", "runc", "container escape", "docker breakout",
     ],
     "Web": [
-        "sqli", "xss", "ssrf", "lfi", "rfi",
-        "injection", "burp", "sqlmap",
+        "sqli", "sql injection", "xss", "ssrf", "lfi", "rfi",
+        "injection", "burp", "sqlmap", "ssti", "nosql",
     ],
-    "Linux-Privesc": ["sudo", "suid", "cron", "capabilities"],
+    "Linux-Privesc": [
+        "linux privilege escalation", "linux privesc",
+        "sudo", "suid", "cron", "capabilities", "gtfobins", "dirtycow",
+        "pwnkit", "no_root_squash", "path hijack", "cap_setuid",
+    ],
     "Windows-Privesc": [
-        "token", "potato", "printspoofer", "uac",
-        "alwaysinstallelevated",
+        "windows privilege escalation", "windows privesc",
+        "token", "potato", "juicypotato", "printspoofer", "godpotato",
+        "uac", "alwaysinstallelevated", "seimpersonate", "unquoted service",
+        "dll hijack", "sam hive", "system hive", "winpeas",
     ],
-    "Network": ["smb", "samba", "ftp", "snmp", "rdp"],
+    "Network": [
+        "smb", "samba", "ftp", "snmp", "rdp", "winrm", "evil-winrm",
+        "ms17-010", "eternalblue", "sambacry", "cve-2007-2447",
+    ],
 }
 
-# ── Technique heading keywords ──────────────────────────────────────────────
+# ── Canonical offensive techniques definitions ─────────────────────────────
+
+CANONICAL_TECHNIQUES: dict[str, dict[str, Any]] = {
+    # ── Windows Privilege Escalation ─────────────────────────────────────────
+    "Token Impersonation (Potato / PrintSpoofer)": {
+        "category": "Windows-Privesc",
+        "os": "windows",
+        "patterns": [
+            "juicypotato", "printspoofer", "seimpersonate", "godpotato",
+            "rottenpotato", "sweetpotato", "roguepotato", "badpotato", "efspotato",
+        ],
+    },
+    "UAC Bypass": {
+        "category": "Windows-Privesc",
+        "os": "windows",
+        "patterns": ["uac bypass", "cmstp", "fodhelper", "slui", "sdclt", "eventvwr"],
+    },
+    "AlwaysInstallElevated": {
+        "category": "Windows-Privesc",
+        "os": "windows",
+        "patterns": ["alwaysinstallelevated"],
+    },
+    "Unquoted Service Path": {
+        "category": "Windows-Privesc",
+        "os": "windows",
+        "patterns": ["unquoted service", "unquoted path", "trusted path"],
+    },
+    "DLL Hijacking": {
+        "category": "Windows-Privesc",
+        "os": "windows",
+        "patterns": ["dll hijack", "dll side-load", "dll hijacking"],
+    },
+    "Insecure Service Permissions": {
+        "category": "Windows-Privesc",
+        "os": "windows",
+        "patterns": ["service permission", "weak service", "sc config", "accesschk"],
+    },
+    "SAM / SYSTEM Hive Extraction": {
+        "category": "Windows-Privesc",
+        "secondary_category": "Password Cracking",
+        "os": "windows",
+        "patterns": ["sam hive", "system hive", "pwdump", "reg save hklm\\sam", "reg save hklm\\system"],
+    },
+    "Windows Privilege Escalation": {
+        "category": "Windows-Privesc",
+        "os": "windows",
+        "patterns": ["winpeas", "powerup", "privilege escalation", "privesc"],
+        "require_phase": "privesc",
+    },
+
+    # ── Linux Privilege Escalation ───────────────────────────────────────────
+    "SUID / GTFOBins": {
+        "category": "Linux-Privesc",
+        "os": "linux",
+        "patterns": ["suid", "gtfobins", "perm -4000", "setuid", "perm /4000"],
+    },
+    "Sudo Misconfiguration": {
+        "category": "Linux-Privesc",
+        "os": "linux",
+        "patterns": ["sudo", "sudoers", "sudoedit", "sudo -l"],
+    },
+    "Cron Job Exploitation": {
+        "category": "Linux-Privesc",
+        "os": "linux",
+        "patterns": ["cron", "crontab", "cronjob", "/etc/cron"],
+    },
+    "Linux Capabilities Abuse": {
+        "category": "Linux-Privesc",
+        "os": "linux",
+        "patterns": ["getcap", "setcap", "cap_setuid", "capabilities"],
+    },
+    "Docker / Container Breakout": {
+        "category": "Container Escape",
+        "secondary_category": "Linux-Privesc",
+        "patterns": [
+            "docker.sock", "docker socket", "container breakout", "container escape",
+            "docker breakout", "docker escape", "cgroup release_agent", "runc",
+            "privileged container", "lxd escape", "lxd breakout",
+        ],
+    },
+    "Linux Kernel Exploit": {
+        "category": "Linux-Privesc",
+        "os": "linux",
+        "patterns": ["dirtycow", "pwnkit", "overlayfs", "cve-2016-5195", "cve-2021-4034"],
+    },
+    "NFS Root Squash Bypass": {
+        "category": "Linux-Privesc",
+        "os": "linux",
+        "patterns": ["no_root_squash", "nfs share"],
+    },
+    "PATH Hijacking": {
+        "category": "Linux-Privesc",
+        "os": "linux",
+        "patterns": ["path hijack", "path manipulation"],
+    },
+    "Linux Privilege Escalation": {
+        "category": "Linux-Privesc",
+        "os": "linux",
+        "patterns": ["linpeas", "privilege escalation", "privesc"],
+        "require_phase": "privesc",
+    },
+
+    # ── Active Directory ─────────────────────────────────────────────────────
+    "AS-REP Roasting": {
+        "category": "Active Directory",
+        "secondary_category": "Kerberos",
+        "os": "windows",
+        "patterns": ["as-rep", "asrep", "getnpusers", "dont_req_preauth", "18200"],
+    },
+    "Kerberoasting": {
+        "category": "Active Directory",
+        "secondary_category": "Kerberos",
+        "os": "windows",
+        "patterns": ["kerberoast", "kerberoasting", "getuserspns", "spn", "13100"],
+    },
+    "DCSync Attack": {
+        "category": "Active Directory",
+        "secondary_category": "Password Cracking",
+        "os": "windows",
+        "patterns": ["dcsync", "ds-replication", "getncchanges", "drsuapi"],
+    },
+    "ADCS Certificate Abuse": {
+        "category": "Active Directory",
+        "secondary_category": "ADCS",
+        "os": "windows",
+        "patterns": [
+            "adcs", "certipy", "certify", "certificate template",
+            "esc1", "esc2", "esc3", "esc4", "esc5", "esc6", "esc7", "esc8", "esc9",
+            "esc10", "esc11", "esc12", "esc13", "esc14", "esc15", "esc16",
+        ],
+    },
+    "BloodHound Attack Path Analysis": {
+        "category": "Active Directory",
+        "os": "windows",
+        "patterns": ["bloodhound", "sharphound", "attack path"],
+    },
+    "Shadow Credentials": {
+        "category": "Active Directory",
+        "os": "windows",
+        "patterns": ["shadow credential", "pywhisker", "whisker", "msds-keycredentiallink"],
+    },
+    "ACL Abuse (GenericAll / WriteDACL / WriteOwner)": {
+        "category": "Active Directory",
+        "os": "windows",
+        "patterns": ["genericall", "writedacl", "writeowner", "genericwrite", "set-domainobjectowner", "powerview"],
+    },
+    "Delegation Abuse (Unconstrained / Constrained / RBCD)": {
+        "category": "Active Directory",
+        "os": "windows",
+        "patterns": [
+            "rbcd", "resource-based constrained delegation", "unconstrained delegation",
+            "constrained delegation", "s4u2self", "s4u2proxy",
+        ],
+    },
+    "Active Directory Exploitation": {
+        "category": "Active Directory",
+        "os": "windows",
+        "patterns": ["active directory", "domain controller", "domain admin", "ntds.dit", "sysvol"],
+    },
+
+    # ── Password Cracking & Credential Dumping ───────────────────────────────
+    "Password Cracking & Hash Dumping": {
+        "category": "Password Cracking",
+        "patterns": [
+            "secretsdump", "mimikatz", "hashcat", "john the ripper", "john",
+            "hash dump", "dumping hashes", "ntds.dit", "sam dump", "cracking password",
+        ],
+    },
+
+    # ── Specific Vulnerabilities & Web/Network Attacks ───────────────────────
+    "SQL Injection with sqlmap": {
+        "category": "Web",
+        "patterns": ["sqlmap", "sqli", "sql injection"],
+    },
+    "CVE-2021-44228 Log4Shell": {
+        "category": "Web",
+        "patterns": ["log4j", "log4shell", "cve-2021-44228", "jndi:ldap", "marshalsec"],
+    },
+    "MS17-010 EternalBlue": {
+        "category": "Network",
+        "patterns": ["ms17-010", "eternalblue", "cve-2017-0143", "smb-vuln-ms17-010", "zzz_exploit"],
+    },
+    "Samba Remote Code Execution": {
+        "category": "Network",
+        "patterns": ["cve-2007-2447", "usermap_script", "sambacry", "cve-2017-7494"],
+        "fallback_patterns": ["samba", "smbd"],
+        "fallback_require": ["exploit", "rce", "remote code"],
+    },
+    "WinRM Shell Access": {
+        "category": "Network",
+        "patterns": ["evil-winrm", "winrm", "5985", "5986"],
+    },
+}
+
+# Mapping known tools to their primary security categories
+TOOL_CATEGORIES: dict[str, str] = {
+    "bloodhound": "Active Directory",
+    "sharphound": "Active Directory",
+    "certipy": "ADCS",
+    "certify": "ADCS",
+    "rubeus": "Kerberos",
+    "kerbrute": "Kerberos",
+    "evil-winrm": "Network",
+    "sqlmap": "Web",
+    "hashcat": "Password Cracking",
+    "john": "Password Cracking",
+    "secretsdump": "Active Directory",
+    "impacket": "Active Directory",
+    "crackmapexec": "Active Directory",
+    "netexec": "Active Directory",
+    "linpeas": "Linux-Privesc",
+    "winpeas": "Windows-Privesc",
+}
+
+# ── Technique heading keywords (for raw heading extraction) ─────────────────
 
 TECHNIQUE_KEYWORDS: list[str] = [
     "roast", "injection", "abuse", "exploit", "hijack", "spoof",
     "poisoning", "relay", "bypass", "escalat", "dump", "forge",
-    "steal", "shadow", "privesc", "overflow", "traversal",
+    "steal", "shadow", "privesc", "overflow", "traversal", "breakout",
+    "gtfobins", "dcsync", "suid", "eternalblue", "log4shell",
 ]
 
 _CVE_RE = re.compile(r"CVE-\d{4}-\d+", re.IGNORECASE)
@@ -90,10 +329,9 @@ def _categorize(
     search = f"{technique} {h2} {' '.join(tools)}".lower()
     cats: list[str] = []
     for cat, keywords in CATEGORY_KEYWORDS.items():
-        # OS-gated categories
-        if cat == "Linux-Privesc" and os_val != "linux":
+        if cat == "Linux-Privesc" and os_val == "windows":
             continue
-        if cat == "Windows-Privesc" and os_val != "windows":
+        if cat == "Windows-Privesc" and os_val == "linux":
             continue
         if any(kw in search for kw in keywords):
             cats.append(cat)
@@ -105,20 +343,30 @@ def _categorize(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def build_graph(all_chunks: list[dict[str, Any]]) -> nx.DiGraph:
-    """Build a knowledge graph from chunk metadata.
+    """Build a comprehensive knowledge graph from chunk metadata and content.
 
-    Parameters
-    ----------
-    all_chunks : list[dict]
-        Chunk dicts produced by the chunker (or retrieved from ChromaDB).
+    Nodes created:
+    - machine: each source writeup
+    - os: target operating system (windows, linux)
+    - category: broad domain categories
+    - technique: canonical & heading techniques
+    - tool: offensive tools used
+    - cve: CVE identifiers
+    - phase: attack phases (privesc, foothold, recon, etc.)
 
-    Returns
-    -------
-    nx.DiGraph
-        The populated knowledge graph.
+    Edges created:
+    - machine → os (rel="os")
+    - machine → tool (rel="uses")
+    - machine → cve (rel="exploits")
+    - machine → technique (rel="uses", rel="demonstrates")
+    - machine → phase (rel="has_phase")
+    - technique → category (rel="belongs_to")
+    - technique → cve (rel="exploits")
+    - tool → category (rel="belongs_to")
+    - tool → technique (rel="enables")
     """
     G = nx.DiGraph()
-    seen_os: dict[str, str] = {}           # machine → os (one edge each)
+    seen_os: dict[str, str] = {}
 
     for chunk in all_chunks:
         source = chunk.get("source", "")
@@ -126,50 +374,140 @@ def build_graph(all_chunks: list[dict[str, Any]]) -> nx.DiGraph:
             continue
 
         os_val = chunk.get("os", "unknown")
-        h2     = chunk.get("h2", "")
-        h3     = chunk.get("h3", "")
-        tools  = _as_list(chunk.get("tools_mentioned", ""))
-        cves   = _as_list(chunk.get("cve_ids", ""))
+        h2 = chunk.get("h2", "")
+        h3 = chunk.get("h3", "")
+        breadcrumb = chunk.get("breadcrumb", "")
+        phase = chunk.get("attack_phase", "")
+        text = chunk.get("text", "")
+        tools = _as_list(chunk.get("tools_mentioned", ""))
+        cves = _as_list(chunk.get("cve_ids", ""))
+
+        text_lower = text.lower()
+        bc_lower = breadcrumb.lower()
+        search_ctx = f"{bc_lower} {text_lower}"
 
         # ── Machine node ─────────────────────────────────────────────────
         if source not in G:
             G.add_node(source, type="machine")
 
-        # ── OS edge (one per machine) ────────────────────────────────────
+        # ── OS node & edge ───────────────────────────────────────────────
         if os_val not in ("unknown", "") and source not in seen_os:
             if os_val not in G:
                 G.add_node(os_val, type="os")
             G.add_edge(source, os_val, rel="os")
             seen_os[source] = os_val
 
+        # ── Attack phase node & edge ─────────────────────────────────────
+        if phase and phase not in ("unknown", ""):
+            if phase not in G:
+                G.add_node(phase, type="phase")
+            if not G.has_edge(source, phase):
+                G.add_edge(source, phase, rel="has_phase")
+
+        # ── CVE nodes & edges (Direct machine → CVE) ─────────────────────
+        for cve in cves:
+            cve_up = cve.upper()
+            if cve_up not in G:
+                G.add_node(cve_up, type="cve")
+            if not G.has_edge(source, cve_up):
+                G.add_edge(source, cve_up, rel="exploits")
+
         # ── Tool nodes & edges ───────────────────────────────────────────
         for tool in tools:
-            if tool not in G:
-                G.add_node(tool, type="tool")
-            if not G.has_edge(source, tool):
-                G.add_edge(source, tool, rel="uses")
+            tool_clean = tool.lower().strip()
+            if tool_clean not in G:
+                G.add_node(tool_clean, type="tool")
+            if not G.has_edge(source, tool_clean):
+                G.add_edge(source, tool_clean, rel="uses")
 
-        # ── Technique inference from h3 heading ──────────────────────────
-        if h3 and _is_technique(h3):
-            if h3 not in G:
-                G.add_node(h3, type="technique")
-            if not G.has_edge(source, h3):
-                G.add_edge(source, h3, rel="uses")
+            # Link tool to category if known
+            if tool_clean in TOOL_CATEGORIES:
+                tcat = TOOL_CATEGORIES[tool_clean]
+                if tcat not in G:
+                    G.add_node(tcat, type="category")
+                if not G.has_edge(tool_clean, tcat):
+                    G.add_edge(tool_clean, tcat, rel="belongs_to")
+
+        # ── Canonical Techniques Matching ────────────────────────────────
+        for tech_name, tech_cfg in CANONICAL_TECHNIQUES.items():
+            req_os = tech_cfg.get("os")
+            if req_os and os_val != req_os:
+                continue
+
+            req_phase = tech_cfg.get("require_phase")
+            if req_phase and phase != req_phase and req_phase not in bc_lower:
+                continue
+
+            patterns = tech_cfg.get("patterns", [])
+            hit = any(pat in search_ctx for pat in patterns)
+
+            # Fallback pattern check (e.g. for Samba RCE)
+            if not hit and "fallback_patterns" in tech_cfg:
+                has_fallback = any(fb in search_ctx for fb in tech_cfg["fallback_patterns"])
+                has_req = any(rq in search_ctx for rq in tech_cfg.get("fallback_require", []))
+                hit = has_fallback and has_req
+
+            if hit:
+                if tech_name not in G:
+                    G.add_node(tech_name, type="technique")
+                if not G.has_edge(source, tech_name):
+                    G.add_edge(source, tech_name, rel="uses")
+                    G.add_edge(source, tech_name, rel="demonstrates")
+
+                # Connect technique to category
+                cat = tech_cfg.get("category")
+                if cat:
+                    if cat not in G:
+                        G.add_node(cat, type="category")
+                    if not G.has_edge(tech_name, cat):
+                        G.add_edge(tech_name, cat, rel="belongs_to")
+
+                sec_cat = tech_cfg.get("secondary_category")
+                if sec_cat:
+                    if sec_cat not in G:
+                        G.add_node(sec_cat, type="category")
+                    if not G.has_edge(tech_name, sec_cat):
+                        G.add_edge(tech_name, sec_cat, rel="belongs_to")
+
+                # Link relevant tools to technique
+                for tool in tools:
+                    t_clean = tool.lower().strip()
+                    if t_clean in patterns or any(t_clean in p for p in patterns):
+                        if not G.has_edge(t_clean, tech_name):
+                            G.add_edge(t_clean, tech_name, rel="enables")
+
+                # Link CVEs to technique
+                for cve in cves:
+                    cve_up = cve.upper()
+                    if not G.has_edge(tech_name, cve_up):
+                        G.add_edge(tech_name, cve_up, rel="exploits")
+
+        # ── Heading-based technique extraction (h3 or h2) ────────────────
+        target_heading = h3 if (h3 and _is_technique(h3)) else (h2 if (h2 and _is_technique(h2)) else "")
+        if target_heading:
+            clean_head = re.sub(r"^(privesc\s*#?\d*|exploit\s*#?\d*)\s*[-:]\s*", "", target_heading, flags=re.I).strip()
+            if not clean_head:
+                clean_head = target_heading.strip()
+
+            if clean_head not in G:
+                G.add_node(clean_head, type="technique")
+            if not G.has_edge(source, clean_head):
+                G.add_edge(source, clean_head, rel="uses")
 
             # technique → exploits → cve
             for cve in cves:
                 cve_up = cve.upper()
                 if cve_up not in G:
                     G.add_node(cve_up, type="cve")
-                if not G.has_edge(h3, cve_up):
-                    G.add_edge(h3, cve_up, rel="exploits")
+                if not G.has_edge(clean_head, cve_up):
+                    G.add_edge(clean_head, cve_up, rel="exploits")
 
             # technique → belongs_to → category
-            for cat in _categorize(h3, h2, tools, os_val):
+            for cat in _categorize(clean_head, h2, tools, os_val):
                 if cat not in G:
                     G.add_node(cat, type="category")
-                if not G.has_edge(h3, cat):
-                    G.add_edge(h3, cat, rel="belongs_to")
+                if not G.has_edge(clean_head, cat):
+                    G.add_edge(clean_head, cat, rel="belongs_to")
 
     return G
 
@@ -197,7 +535,6 @@ def load_graph() -> nx.DiGraph:
     return nx.DiGraph()
 
 
-
 # ═════════════════════════════════════════════════════════════════════════════
 #  Query helpers
 # ═════════════════════════════════════════════════════════════════════════════
@@ -205,7 +542,7 @@ def load_graph() -> nx.DiGraph:
 def get_machines_for_technique(
     graph: nx.DiGraph, technique: str,
 ) -> list[str]:
-    """Return machines that *use* the given technique."""
+    """Return machines that *use* or *demonstrate* the given technique."""
     if technique not in graph:
         return []
     return sorted(
@@ -241,16 +578,17 @@ def get_tools_for_machine(
 def get_cves_for_machine(
     graph: nx.DiGraph, machine: str,
 ) -> list[str]:
-    """Return CVEs reachable from the machine (machine → technique → cve)."""
+    """Return CVEs reachable from the machine (direct or machine → technique → cve)."""
     if machine not in graph:
         return []
     cves: set[str] = set()
-    for tech in graph.successors(machine):
-        if graph.nodes[tech].get("type") != "technique":
-            continue
-        for target in graph.successors(tech):
-            if graph.nodes[target].get("type") == "cve":
-                cves.add(target)
+    for succ in graph.successors(machine):
+        if graph.nodes[succ].get("type") == "cve":
+            cves.add(succ)
+        elif graph.nodes[succ].get("type") == "technique":
+            for target in graph.successors(succ):
+                if graph.nodes[target].get("type") == "cve":
+                    cves.add(target)
     return sorted(cves)
 
 
@@ -263,8 +601,13 @@ def query_graph(
 ) -> dict[str, list[str]]:
     """Match a free-text *query* against the knowledge graph.
 
-    Checks category keywords, tool node names, and CVE patterns.
-    Returns a dict with five lists (all empty if nothing matched).
+    Checks category keywords, canonical techniques, tool nodes, and CVE patterns.
+    Returns a dict with:
+    - matched_categories
+    - matched_techniques
+    - matched_tools
+    - matched_cves
+    - relevant_machines
     """
     low = query.lower()
 
@@ -274,43 +617,94 @@ def query_graph(
         if any(kw in low for kw in keywords)
     ]
 
+    # Specific category overrides / intent alignments
+    if any(w in low for w in ["privilege escalation", "privesc"]):
+        if "windows" in low and "Windows-Privesc" not in matched_categories:
+            matched_categories.append("Windows-Privesc")
+        if "linux" in low and "Linux-Privesc" not in matched_categories:
+            matched_categories.append("Linux-Privesc")
+
+    if any(w in low for w in ["active directory", " ad ", "ad "]) and "Active Directory" not in matched_categories:
+        matched_categories.append("Active Directory")
+
+    if any(w in low for w in ["password cracking", "hash dumping", "hash dump", "cracking"]) and "Password Cracking" not in matched_categories:
+        matched_categories.append("Password Cracking")
+
+    if any(w in low for w in ["docker", "container escape", "container breakout"]) and "Container Escape" not in matched_categories:
+        matched_categories.append("Container Escape")
+
     # ── Tools (tool nodes whose name appears in the query) ───────────────
     matched_tools: list[str] = sorted({
         node for node, data in graph.nodes(data=True)
-        if data.get("type") == "tool" and node in low
+        if data.get("type") == "tool" and (f" {node} " in f" {low} " or node == low)
     })
 
     # ── CVEs ─────────────────────────────────────────────────────────────
     matched_cves: list[str] = sorted({
         c.upper() for c in _CVE_RE.findall(query) if c.upper() in graph
     })
+    if "ms17-010" in low and "CVE-2017-0143" in graph:
+        matched_cves.append("CVE-2017-0143")
 
-    # ── Techniques (derived from matched categories) ─────────────────────
-    matched_techniques: list[str] = sorted({
+    # ── Techniques (direct name match or derived from category) ──────────
+    direct_techniques: set[str] = set()
+    for node, data in graph.nodes(data=True):
+        if data.get("type") == "technique":
+            node_low = node.lower()
+            if node_low in low or any(kw in low for kw in node_low.split() if len(kw) > 4):
+                direct_techniques.add(node)
+
+    category_techniques: set[str] = {
         tech
         for cat in matched_categories
         for tech in get_techniques_for_category(graph, cat)
-    })
+    }
 
-    # ── Relevant machines (reachable from any match) ─────────────────────
+    matched_techniques: list[str] = sorted(direct_techniques | category_techniques)
+
+    # ── Relevant machines (reachable from matches) ───────────────────────
     machines: set[str] = set()
 
-    for tech in matched_techniques:
+    # From direct or category techniques
+    for tech in direct_techniques:
         machines.update(get_machines_for_technique(graph, tech))
 
+    # From matched tools
     for tool in matched_tools:
         machines.update(
             n for n in graph.predecessors(tool)
             if graph.nodes[n].get("type") == "machine"
         )
 
+    # From matched CVEs (both direct and via technique)
     for cve in matched_cves:
+        machines.update(
+            n for n in graph.predecessors(cve)
+            if graph.nodes[n].get("type") == "machine"
+        )
         for tech in graph.predecessors(cve):
             if graph.nodes[tech].get("type") == "technique":
                 machines.update(get_machines_for_technique(graph, tech))
 
+    # If machines set is empty or query is broad category query, expand from category techniques
+    if not machines or any(w in low for w in ["cheatsheet", "common", "across", "all machines"]):
+        for tech in category_techniques:
+            machines.update(get_machines_for_technique(graph, tech))
+
+    # Filter machines by OS if OS is explicitly in query
+    if "windows" in low and "linux" not in low:
+        machines = {
+            m for m in machines
+            if any(graph.edges[m, succ].get("rel") == "os" and succ == "windows" for succ in graph.successors(m))
+        }
+    elif "linux" in low and "windows" not in low:
+        machines = {
+            m for m in machines
+            if any(graph.edges[m, succ].get("rel") == "os" and succ == "linux" for succ in graph.successors(m))
+        }
+
     return {
-        "matched_categories": matched_categories,
+        "matched_categories": sorted(matched_categories),
         "matched_techniques": matched_techniques,
         "matched_tools":      matched_tools,
         "matched_cves":       matched_cves,

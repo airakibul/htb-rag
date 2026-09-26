@@ -237,7 +237,12 @@ def main() -> None:
     logger.info(f"  ✅ Files processed : {processed}")
     logger.info(f"  ⚠️  Files skipped  : {skipped}")
     logger.info(f"  📦 Total chunks   : {len(all_chunks)}")
-    logger.info(f"  🔗 Graph nodes    : {graph.number_of_nodes()}")
+    n_mach = sum(1 for _, d in graph.nodes(data=True) if d.get("type") == "machine")
+    n_tech = sum(1 for _, d in graph.nodes(data=True) if d.get("type") == "technique")
+    n_cve  = sum(1 for _, d in graph.nodes(data=True) if d.get("type") == "cve")
+    n_tool = sum(1 for _, d in graph.nodes(data=True) if d.get("type") == "tool")
+    logger.info(f"  🔗 Graph nodes    : {graph.number_of_nodes()} (edges: {graph.number_of_edges()})")
+    logger.info(f"     → Machines: {n_mach}, Techniques: {n_tech}, CVEs: {n_cve}, Tools: {n_tool}")
     logger.info(f"  ⏱  Time taken     : {mins}m {secs:02d}s")
 
 

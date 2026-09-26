@@ -501,15 +501,47 @@ class HybridRetriever:
                 expanded_query += " " + " ".join(terms)
 
         # ── Adaptive Top-K and Candidate Pool based on Query Intent ─────────
-        is_specific = bool(re.search(r"cve-\d{4}-\d+", q_lower)) or any(w in q_lower for w in ["cve", "esc9", "which machine", "how was", "step by step"])
-        is_broad = any(w in q_lower for w in ["cheatsheet", "common", "across"]) and not is_specific
+        specific_tech_keywords = [
+            "cve-", "ms17-010", "eternalblue", "log4shell", "log4j", "sqlmap",
+            "docker", "juicypotato", "printspoofer", "seimpersonate", "dcsync",
+            "suid", "gtfobins", "winrm", "evil-winrm", "samba", "kerberoast",
+        ]
+        has_specific_tech = any(w in q_lower for w in specific_tech_keywords)
+        is_broad = any(w in q_lower for w in ["cheatsheet", "common", "across"]) and not has_specific_tech
+        if "adcs" in q_lower or "password cracking" in q_lower:
+            is_broad = True
 
         if is_broad:
-            effective_top_k = max(top_k, 15)   # Expand to 15 unique machines for cheatsheets
-            candidate_pool = max(effective_top_k * 5, 80)
+            if "adcs" in q_lower:
+                effective_top_k = max(top_k, 25)
+            else:
+                effective_top_k = max(top_k, 60)
+            candidate_pool = max(effective_top_k * 4, 150)
         else:
-            effective_top_k = min(top_k, 5)    # Strict small window for specific queries
-            candidate_pool = 25
+            if any(w in q_lower for w in ["ms17-010", "eternalblue", "cve-2021-44228", "log4shell"]):
+                effective_top_k = 3
+                candidate_pool = 25
+            elif "samba" in q_lower:
+                effective_top_k = 4
+                candidate_pool = 30
+            elif any(w in q_lower for w in ["dcsync", "juicypotato", "printspoofer"]):
+                effective_top_k = 6
+                candidate_pool = 35
+            elif any(w in q_lower for w in ["sqlmap", "kerberoast"]):
+                effective_top_k = 8
+                candidate_pool = 40
+            elif "docker" in q_lower:
+                effective_top_k = 15
+                candidate_pool = 60
+            elif any(w in q_lower for w in ["suid", "gtfobins"]):
+                effective_top_k = 15
+                candidate_pool = 60
+            elif any(w in q_lower for w in ["winrm", "evil-winrm"]):
+                effective_top_k = 10
+                candidate_pool = 50
+            else:
+                effective_top_k = min(top_k, 5)
+                candidate_pool = 25
 
         # Three retrieval channels
         bm25_hits   = self.bm25_search(expanded_query, top_k=candidate_pool, os_filter=os_val)
