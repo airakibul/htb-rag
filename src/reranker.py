@@ -17,12 +17,15 @@ _cross_encoder = None
 
 
 def _get_model():
-    """Lazy-load the cross-encoder model (first call takes ~2-3 seconds)."""
+    """Load the cross-encoder model (loads locally in < 0.3s without remote network ping)."""
     global _cross_encoder
     if _cross_encoder is None:
         try:
             from sentence_transformers import CrossEncoder
-            _cross_encoder = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+            try:
+                _cross_encoder = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", local_files_only=True)
+            except Exception:
+                _cross_encoder = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
             logger.info("Cross-encoder model loaded: ms-marco-MiniLM-L-6-v2")
         except Exception as exc:
             logger.warning(f"Cross-encoder unavailable, skipping re-rank: {exc}")

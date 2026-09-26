@@ -52,7 +52,10 @@ def _get_embed_model() -> Any:
         try:
             from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
             logger.info(f"Loading local SentenceTransformer model: {EMBEDDING_MODEL_NAME}...")
-            _embed_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+            try:
+                _embed_model = SentenceTransformer(EMBEDDING_MODEL_NAME, local_files_only=True)
+            except Exception:
+                _embed_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
             logger.info(f"✅ Loaded SentenceTransformer model: {EMBEDDING_MODEL_NAME}")
         except Exception as exc:
             logger.error(f"❌ Failed to load SentenceTransformer: {exc}")

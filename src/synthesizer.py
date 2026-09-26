@@ -12,6 +12,9 @@ import re
 from typing import Any
 
 from src.config import (
+    GEMINI_API_KEY,
+    GROQ_API_KEY,
+    GROQ_MODEL,
     OPENROUTER_API_KEY,
     OPENROUTER_BASE_URL,
     OPENROUTER_FALLBACK_MODELS,
@@ -148,6 +151,55 @@ def _clean_response(text: str) -> str:
     return cleaned
 
 
+def _call_groq(messages: Any) -> str | None:
+    """Generate answer ultra-fast using Groq API (typical latency ~1-2s)."""
+    if not GROQ_API_KEY:
+        return None
+    try:
+        from groq import Groq
+        client = Groq(api_key=GROQ_API_KEY, timeout=15.0)
+        logger.info(f"Synthesizing answer via Groq ({GROQ_MODEL})...")
+        response = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=messages,
+            max_tokens=900,
+            temperature=0.1,
+        )
+        content = response.choices[0].message.content
+        if content and content.strip():
+            cleaned = _clean_response(content.strip())
+            if cleaned:
+                return cleaned
+    except Exception as exc:
+        logger.warning(f"Groq generation failed, falling back to Gemini/OpenRouter: {exc}")
+    return None
+
+
+def _call_gemini(user_content: str) -> str | None:
+    """Generate answer using Gemini 3.8 Flash as secondary fast fallback."""
+    if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_key_here":
+        return None
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel(
+            model_name="models/gemini-3.8-flash",
+            system_instruction=SYSTEM_PROMPT,
+        )
+        logger.info("Synthesizing answer via Gemini 3.8 Flash...")
+        response = model.generate_content(
+            user_content,
+            generation_config={"max_output_tokens": 1000, "temperature": 0.1},
+        )
+        if response.text and response.text.strip():
+            cleaned = _clean_response(response.text.strip())
+            if cleaned:
+                return cleaned
+    except Exception as exc:
+        logger.warning(f"Gemini fallback failed, falling back to OpenRouter: {exc}")
+    return None
+
+
 def _call_openrouter(messages: Any) -> str | None:
     """Generate answer using OpenRouter API with free models and fallbacks."""
     if not OPENROUTER_API_KEY or OPENROUTER_API_KEY == "your_openrouter_key_here":
@@ -171,7 +223,7 @@ def _call_openrouter(messages: Any) -> str | None:
                 response: Any = client.chat.completions.create(
                     model=model,
                     messages=messages,
-                    max_tokens=3500,
+                    max_tokens=1500,
                     temperature=0.1,
                 )
                 content = response.choices[0].message.content
@@ -200,7 +252,7 @@ def synthesize(
     query: str,
     retrieval_result: dict[str, Any],
 ) -> dict[str, Any]:
-    """Generate a cited answer from retrieved context solely via OpenRouter.
+    """Generate a cited answer from retrieved context via Groq (with OpenRouter fallback).
 
     Returns::
 
@@ -221,10 +273,24 @@ def synthesize(
         },
     ]
 
-    answer_text = (
-        _call_openrouter(messages)
-        or "Insufficient data or OpenRouter rate limit reached to generate the answer."
-    )
+    user_prompt = f"Context:\n{context}\n\nQuestion: {query}"
+
+    provider = "none"
+    answer_text = _call_groq(messages)
+    if answer_text:
+        provider = "groq"
+    else:
+        answer_text = _call_gemini(user_prompt)
+        if answer_text:
+            provider = "gemini"
+        else:
+            answer_text = _call_openrouter(messages)
+            if answer_text:
+                provider = "openrouter"
+            else:
+                answer_text = "Insufficient data or LLM rate limit reached to generate the answer."
+
+    logger.info(f"Synthesized answer using provider: {provider}")
 
 
     # ── Collect unique sources cited ─────────────────────────────────────
@@ -247,4 +313,5 @@ def synthesize(
         "sources":     sources,
         "chunks_used": len(chunks),
         "graph_used":  graph_used,
+        "provider":    provider,
     }

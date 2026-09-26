@@ -22,10 +22,13 @@ IMAGE_CACHE = "./cache/image_cache.json"
 # ── API Keys ──────────────────────────────────────────────────────────────────
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GROQ_API_KEY = ""
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
 # ── Model identifiers ────────────────────────────────────────────────────────
-# OpenRouter LLM Configuration (Free Tier Models)
+# Groq LLM Configuration (Ultra-fast LPU inference)
+GROQ_MODEL = os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")
+
+# OpenRouter LLM Configuration (Fallback)
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
 OPENROUTER_FALLBACK_MODELS = [

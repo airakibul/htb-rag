@@ -58,6 +58,8 @@ class QueryResponse(BaseModel):
     chunks_used: int
     graph_used: bool
     query: str
+    provider: str = "unknown"
+    latency_seconds: float = 0.0
     chunks: list[dict[str, Any]] = []
     graph: dict[str, Any] = {}
 
@@ -154,16 +156,28 @@ async def index():
 @app.post("/query", response_model=QueryResponse)
 def query(req: QueryRequest):
     """Retrieve context **and** synthesise a cited answer."""
+    import time
+    t_start = time.time()
     retriever: HybridRetriever = get_retriever()
 
+    t0 = time.time()
     retrieval = retriever.retrieve(
         query=req.question,
         top_k=req.top_k,
         os_filter=req.os,
         difficulty_filter=req.difficulty,
     )
+    t_ret = time.time() - t0
 
+    t1 = time.time()
     result = synthesize(req.question, retrieval)
+    t_syn = time.time() - t1
+
+    total_latency = round(time.time() - t_start, 2)
+    logger.info(
+        f"Query '{req.question[:30]}...' -> Retrieval={t_ret:.2f}s | Synthesis={t_syn:.2f}s | "
+        f"Total={total_latency:.2f}s | Provider={result.get('provider', 'unknown')}"
+    )
 
     return QueryResponse(
         answer=result["answer"],
@@ -171,6 +185,8 @@ def query(req: QueryRequest):
         chunks_used=result["chunks_used"],
         graph_used=result["graph_used"],
         query=req.question,
+        provider=result.get("provider", "unknown"),
+        latency_seconds=total_latency,
         chunks=retrieval.get("chunks", []),
         graph=retrieval.get("graph", {}),
     )
@@ -186,6 +202,17 @@ async def health():
         "chunks_indexed": len(retriever.docs),
         "graph_nodes": graph.number_of_nodes(),
         "graph_edges": graph.number_of_edges(),
+    }
+
+
+@app.get("/debug_llm")
+def debug_llm():
+    from src.config import GEMINI_API_KEY, GROQ_API_KEY, GROQ_MODEL, OPENROUTER_MODEL
+    return {
+        "has_groq": bool(GROQ_API_KEY),
+        "groq_model": GROQ_MODEL,
+        "has_gemini": bool(GEMINI_API_KEY),
+        "openrouter_model": OPENROUTER_MODEL,
     }
 
 
