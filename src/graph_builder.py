@@ -510,8 +510,8 @@ def build_graph(all_chunks: list[dict[str, Any]]) -> nx.DiGraph:
                     existing = G.nodes[tech_name].get("aliases", [])
                     G.nodes[tech_name]["aliases"] = sorted(set(existing + tech_aliases))
                 if not G.has_edge(source, tech_name):
-                    G.add_edge(source, tech_name, rel="uses")
-                    G.add_edge(source, tech_name, rel="demonstrates")
+                    # DiGraph allows only one edge per (src, dst); use combined rel
+                    G.add_edge(source, tech_name, rel="uses_and_demonstrates")
 
                 # Connect technique to category
                 cat = tech_cfg.get("category")

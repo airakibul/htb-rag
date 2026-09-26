@@ -48,8 +48,8 @@ Rules:
 """
 
 # ── Context size budget ──────────────────────────────────────────────────────
-_MAX_CONTEXT_CHARS = 10000
-_MAX_CHUNK_CHARS   = 1200
+_MAX_CONTEXT_CHARS = 18000   # Broad queries retrieve 25 chunks; modern LLMs handle 128K+
+_MAX_CHUNK_CHARS   = 1500
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -162,7 +162,7 @@ def _call_groq(messages: Any) -> str | None:
         response = client.chat.completions.create(
             model=GROQ_MODEL,
             messages=messages,
-            max_tokens=900,
+            max_tokens=1800,  # Broad cheatsheet queries need room for 15+ techniques
             temperature=0.1,
         )
         content = response.choices[0].message.content

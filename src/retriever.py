@@ -22,11 +22,25 @@ from src.query_enhancer import enhance_query
 logger = logging.getLogger(__name__)
 
 STOPWORDS: set[str] = {
+    # Original terms
     "what", "are", "the", "common", "across", "machines", "machine",
     "htb", "provide", "a", "an", "which", "demonstrate", "demonstrates",
     "how", "was", "it", "exploited", "each", "one", "and", "used", "is",
     "for", "in", "of", "to", "with", "show", "techniques", "cheatsheet",
     "give", "seen",
+    # English function words & pronouns
+    "do", "does", "did", "has", "have", "had", "be", "been", "being",
+    "will", "would", "could", "should", "may", "might", "can", "shall",
+    "am", "this", "that", "these", "those", "their", "them", "they",
+    "we", "you", "your", "our", "me", "my", "its", "his", "her",
+    "but", "or", "not", "no", "so", "if", "then", "than", "too",
+    "very", "just", "about", "also", "more", "some", "any", "all",
+    "most", "other", "such", "only", "into", "over", "after", "before",
+    "between", "under", "through", "during", "here", "there", "where",
+    "when", "why", "up", "out", "on", "off", "at", "by", "from",
+    # Query-specific filler words
+    "example", "examples", "describe", "explain", "tell", "list",
+    "detail", "details", "work", "works", "please", "want",
 }
 
 
@@ -35,6 +49,7 @@ STOPWORDS: set[str] = {
 
 def _compute_lexical_density(query_terms: list[str], text: str, breadcrumb: str) -> float:
     """Compute exact term match density in breadcrumb and text body."""
+    # Double breadcrumb weight: heading/phase terms are stronger relevance signals than body text
     combined = f"{breadcrumb} {breadcrumb} {text}".lower()
     matches = sum(1 for term in query_terms if term in combined)
     return matches / max(len(query_terms), 1)

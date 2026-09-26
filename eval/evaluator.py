@@ -130,8 +130,9 @@ def _compute_metrics(
 
     recall    = tp / len(expected)  if expected  else 0.0
     precision = tp / len(retrieved) if retrieved else 0.0
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
 
-    return round(recall, 4), round(precision, 4)
+    return round(recall, 4), round(precision, 4), round(f1, 4)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -202,11 +203,11 @@ def main() -> None:
             if c.get("metadata", {}).get("source")
         })
 
-        recall, precision = _compute_metrics(set(sources), expected_machines)
+        recall, precision, f1 = _compute_metrics(set(sources), expected_machines)
 
         rows.append({
             "qnum": qnum, "title": title,
-            "recall": recall, "precision": precision,
+            "recall": recall, "precision": precision, "f1": f1,
             "sources": sources,
         })
 
@@ -222,7 +223,7 @@ def main() -> None:
             "question": q_text, "answer": answer,
         })
 
-        print(f"R={recall:.2f}  P={precision:.2f}")
+        print(f"R={recall:.2f}  P={precision:.2f}  F1={f1:.2f}")
 
     # ── Write results.md ─────────────────────────────────────────────────
     _write_results(rows)

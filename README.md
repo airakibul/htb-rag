@@ -7,17 +7,17 @@ An offensive security Retrieval-Augmented Generation (RAG) assistant built over 
 ## Architecture Overview
 
 ```
-raw/*.md ──► AST & Heading Chunker ──► Gemini Embedding ──► ChromaDB (Vector Store)
+raw/*.md ──► AST & Heading Chunker ──► SentenceTransformer Embedding ──► ChromaDB (Vector Store)
                                  └──► Knowledge Graph  ──► NetworkX (Graph Store)
 
 User Query ──► HybridRetriever
                  ├── BM25 (Lexical matching for tools, CVEs, exact flags)
-                 ├── ChromaDB (Dense semantic retrieval via Gemini embeddings)
+                 ├── ChromaDB (Dense semantic retrieval via SentenceTransformer embeddings)
                  └── NetworkX (Cross-machine attack graph traversal)
                └──► Reciprocal Rank Fusion (RRF)
                └──► Cross-Encoder Reranker (ms-marco-MiniLM-L-6-v2)
                └──► Source Diversification (anti-monopoly filtering)
-               └──► Synthesizer (Groq openai/gpt-oss-120b with fallback chain)
+               └──► Synthesizer (Groq qwen/qwen3.8-27b with fallback chain)
                └──► FastAPI REST API (`/query`, `/retrieve`)
 ```
 
@@ -27,8 +27,8 @@ User Query ──► HybridRetriever
 
 | Component | Technology | Role |
 | :--- | :--- | :--- |
-| **LLM Synthesis** | Groq `openai/gpt-oss-120b` *(fallback: 20b & Gemini Flash)* | Strict cited answer generation |
-| **Embeddings** | Google Gemini `gemini-embedding-001` | Dense semantic chunk representation |
+| **LLM Synthesis** | Groq `qwen/qwen3.8-27b` *(fallback: Gemini 3.8 Flash & OpenRouter free models)* | Strict cited answer generation |
+| **Embeddings** | SentenceTransformer `all-MiniLM-L6-v2` | Local 384-dim dense chunk embeddings |
 | **Vision (Optional)** | Google Gemini `gemini-2.5-flash` | Screenshot and diagram description |
 | **Vector DB** | ChromaDB (local persistence in `./db/chroma`) | Chunk storage & semantic indexing |
 | **Lexical Search** | BM25 (`rank-bm25`) | Exact keyword, tool, and CVE search |

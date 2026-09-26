@@ -20,6 +20,7 @@ if hasattr(sys.stdout, "reconfigure"):
     except Exception:  # noqa: BLE001, S110
         pass
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import Any
@@ -154,14 +155,15 @@ async def index():
 
 
 @app.post("/query", response_model=QueryResponse)
-def query(req: QueryRequest):
+async def query(req: QueryRequest):
     """Retrieve context **and** synthesise a cited answer."""
     import time
     t_start = time.time()
     retriever: HybridRetriever = get_retriever()
 
     t0 = time.time()
-    retrieval = retriever.retrieve(
+    retrieval = await asyncio.to_thread(
+        retriever.retrieve,
         query=req.question,
         top_k=req.top_k,
         os_filter=req.os,
@@ -170,7 +172,7 @@ def query(req: QueryRequest):
     t_ret = time.time() - t0
 
     t1 = time.time()
-    result = synthesize(req.question, retrieval)
+    result = await asyncio.to_thread(synthesize, req.question, retrieval)
     t_syn = time.time() - t1
 
     total_latency = round(time.time() - t_start, 2)

@@ -51,9 +51,13 @@ def _fallback_enhance(query: str, graph: nx.DiGraph | None = None) -> EnhancedQu
 
     # OS detection
     target_os = None
-    if "windows" in low and "linux" not in low:
+    linux_indicators = ["linux", "suid", "sudo", "cron", "gtfobins", "capabilities", "linpeas", "dirtycow", "pwnkit", "polkit"]
+    windows_indicators = ["windows", "adcs", "kerberos", "kerberoast", "active directory", "mimikatz", "secretsdump", "seimpersonate", "printspoofer", "juicypotato", "winpeas", "sam hive", "system hive", "lsass"]
+    has_linux = any(w in low for w in linux_indicators)
+    has_windows = any(w in low for w in windows_indicators)
+    if has_windows and not has_linux:
         target_os = "windows"
-    elif "linux" in low and "windows" not in low:
+    elif has_linux and not has_windows:
         target_os = "linux"
 
     # Difficulty detection
@@ -73,10 +77,16 @@ def _fallback_enhance(query: str, graph: nx.DiGraph | None = None) -> EnhancedQu
         # OS deduction from matched graph categories if OS wasn't explicitly stated
         if not target_os:
             cats = hits.get("matched_categories", [])
-            if any(c in cats for c in ["Windows-Privesc", "Active Directory", "ADCS", "Kerberos"]):
+            has_win_cat = any(c in cats for c in ["Active Directory", "ADCS", "Kerberos"])
+            has_lin_cat = "Linux-Privesc" in cats
+            has_win_privesc = "Windows-Privesc" in cats
+
+            if has_win_cat:
                 target_os = "windows"
-            elif "Linux-Privesc" in cats:
+            elif has_lin_cat and not has_win_privesc:
                 target_os = "linux"
+            elif has_win_privesc and not has_lin_cat:
+                target_os = "windows"
 
         # Collect top aliases and names of matched nodes
         for cve in hits.get("matched_cves", [])[:3]:

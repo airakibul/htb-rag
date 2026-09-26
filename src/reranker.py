@@ -63,9 +63,9 @@ def rerank(
         return chunks[:top_k] if top_k else chunks
 
     try:
-        # Build (query, document) pairs — truncate document to ~512 chars
-        # to stay within the model's token limit
-        pairs = [(query, c.get("text", "")[:512]) for c in chunks]
+        # Build (query, document) pairs — truncate document to ~1800 chars
+        # (~450 tokens), safely within the ms-marco 512-token limit
+        pairs = [(query, c.get("text", "")[:1800]) for c in chunks]
 
         scores = model.predict(pairs)
 
