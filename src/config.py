@@ -20,16 +20,28 @@ GRAPH_PATH = "./graph/htb_graph.json"
 IMAGE_CACHE = "./cache/image_cache.json"
 
 # ── API Keys ──────────────────────────────────────────────────────────────────
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_API_KEY = ""
 
 # ── Model identifiers ────────────────────────────────────────────────────────
-GEMINI_EMBED_MODEL = "models/gemini-embedding-001"
+# OpenRouter LLM Configuration (Free Tier Models)
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
+OPENROUTER_FALLBACK_MODELS = [
+    "qwen/qwen3.8-27b:free",
+    "google/gemma-4-31b-it:free",
+    "nvidia/nemotron-3.5-lightning:free",
+    "openrouter/free",
+]
+
+# Local Sentence Transformers Embedding
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")
 GEMINI_VISION_MODEL = "models/gemini-2.5-flash"
-GROQ_LLM_MODEL = "openai/gpt-oss-120b"
+
 
 # ── Tuning knobs ──────────────────────────────────────────────────────────────
-EMBED_BATCH_SIZE = 90
+EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "128"))
 CHUNK_TOKEN_LIMIT = 600        # ≈ 2 400 characters
 TOP_K = 8
 

@@ -31,7 +31,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from src import embedder
 from src.chunker import chunk_file
-from src.config import GEMINI_API_KEY, GROQ_API_KEY, RAW_DIR
+from src.config import GEMINI_API_KEY, OPENROUTER_API_KEY, RAW_DIR
 from src.graph_builder import build_graph, save_graph
 
 logger = logging.getLogger(__name__)
@@ -58,27 +58,28 @@ def _parse_args() -> argparse.Namespace:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _validate_keys() -> None:
-    """Exit early if API keys are missing or still set to placeholders."""
-    missing: list[str] = []
-    if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_key_here":
-        missing.append("GEMINI_API_KEY")
-    if not GROQ_API_KEY or GROQ_API_KEY == "your_groq_key_here":
-        missing.append("GROQ_API_KEY")
+    """Check LLM and service API keys."""
+    configured: list[str] = []
+    if OPENROUTER_API_KEY and OPENROUTER_API_KEY != "your_openrouter_key_here":
+        configured.append("OpenRouter")
+    if GEMINI_API_KEY and GEMINI_API_KEY != "your_gemini_key_here":
+        configured.append("Gemini")
 
-    if missing:
-        logger.error(f"❌ Missing API key(s): {', '.join(missing)}")
-        logger.error("   → Set them in .env and try again.")
-        sys.exit(1)
+    if configured:
+        logger.info(f"🔑 Active LLM provider(s): {', '.join(configured)}")
+    else:
+        logger.warning("⚠️ No LLM API key configured (OPENROUTER_API_KEY, GROQ_API_KEY, or GEMINI_API_KEY).")
+        logger.warning("   Synthesis will run in fallback/offline mode until a key is added in .env.")
 
 
-def _validate_gemini() -> None:
-    """Quick smoke-test of the Gemini Embedding API."""
+def _validate_embedder() -> None:
+    """Quick smoke-test of the SentenceTransformer embedding model."""
     try:
-        embedder.embed_texts(["test"])
-        logger.info("✅ Gemini API validated")
+        vecs = embedder.embed_texts(["test smoke"])
+        dim = len(vecs[0]) if vecs else 0
+        logger.info(f"✅ SentenceTransformer embedding engine ready (dim={dim})")
     except Exception as exc:
-        logger.error(f"❌ Gemini API error: {exc}")
-        logger.error("   → Check GEMINI_API_KEY in .env")
+        logger.error(f"❌ Embedder error: {exc}")
         sys.exit(1)
 
 
@@ -165,9 +166,9 @@ def main() -> None:
     # ── 1. Validate API keys ─────────────────────────────────────────────
     _validate_keys()
 
-    # ── 2. Validate Gemini API (skip for dry-run) ────────────────────────
+    # ── 2. Validate Embedder (skip for dry-run) ─────────────────────────
     if not args.dry_run:
-        _validate_gemini()
+        _validate_embedder()
 
     # ── 3. Check existing collection ─────────────────────────────────────
     if not args.dry_run:
@@ -197,27 +198,36 @@ def main() -> None:
             logger.warning(f"⚠️  Skipped {md_path.name} (access denied)")
             skipped += 1
 
-    logger.info(f"🔢 Chunked {len(all_chunks)} chunks from {processed} files")
+    # ── 7. Deduplicate chunks by ID ──────────────────────────────────────
+    unique_chunks: list[dict] = []
+    seen_ids: set[str] = set()
+    for c in all_chunks:
+        cid = embedder._chunk_id(c)
+        if cid not in seen_ids:
+            seen_ids.add(cid)
+            unique_chunks.append(c)
 
-    # ── 7. Dry run → print stats and exit ────────────────────────────────
+    logger.info(f"🔢 Chunked {len(all_chunks)} chunks ({len(unique_chunks)} unique) from {processed} files")
+
+    # ── 8. Dry run → print stats and exit ────────────────────────────────
     if args.dry_run:
         elapsed = time.time() - t0
         mins, secs = divmod(int(elapsed), 60)
         logger.info("─── Dry-run summary ───────────────────────────")
         logger.info(f"  ✅ Files processed : {processed}")
         logger.info(f"  ⚠️  Files skipped  : {skipped}")
-        logger.info(f"  📦 Total chunks   : {len(all_chunks)}")
+        logger.info(f"  📦 Total chunks   : {len(unique_chunks)}")
         logger.info(f"  ⏱  Time taken     : {mins}m {secs:02d}s")
-        if all_chunks:
+        if unique_chunks:
             logger.info("─── Sample Chunks (Up to 3) ───────────────────")
-            for i, chunk in enumerate(all_chunks[:3], 1):
+            for i, chunk in enumerate(unique_chunks[:3], 1):
                 meta = chunk.get("metadata", {})
                 snippet = chunk.get("text", "")[:120].replace("\n", " ")
                 logger.info(f"[Sample {i}] Metadata: {meta} | Snippet: {snippet}...")
         return
 
-    # ── 8. Store chunks in ChromaDB ──────────────────────────────────────
-    _store_with_retry(all_chunks)
+    # ── 9. Store chunks in ChromaDB ──────────────────────────────────────
+    _store_with_retry(unique_chunks)
 
     # ── 9. Build & save knowledge graph ──────────────────────────────────
     all_stored = embedder.get_all_documents()

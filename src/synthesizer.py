@@ -1,8 +1,8 @@
 """
-synthesizer.py – Cited answer generation via Groq (openai/gpt-oss-120b).
+synthesizer.py – Cited answer generation solely via OpenRouter LLM models.
 
 Formats retrieved context, prepends graph findings when available, and
-calls the Groq chat API with a strict cybersecurity system prompt.
+calls the OpenRouter chat API with a strict cybersecurity system prompt.
 """
 
 from __future__ import annotations
@@ -10,10 +10,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import google.generativeai as genai
-import groq
-
-from src.config import GEMINI_API_KEY, GROQ_API_KEY, GROQ_LLM_MODEL
+from src.config import (
+    OPENROUTER_API_KEY,
+    OPENROUTER_BASE_URL,
+    OPENROUTER_FALLBACK_MODELS,
+    OPENROUTER_MODEL,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +105,52 @@ def format_context(retrieval_result: dict[str, Any]) -> str:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+#  LLM Provider Helpers
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _call_openrouter(messages: Any) -> str | None:
+    """Generate answer using OpenRouter API with free models and fallbacks."""
+    if not OPENROUTER_API_KEY or OPENROUTER_API_KEY == "your_openrouter_key_here":
+        return None
+    try:
+        from openai import OpenAI  # type: ignore[import-not-found]
+        client: Any = OpenAI(
+            base_url=OPENROUTER_BASE_URL,
+            api_key=OPENROUTER_API_KEY,
+            timeout=25.0,
+            max_retries=0,  # Fail fast on rate limits without wasting time on retries
+            default_headers={
+                "HTTP-Referer": "https://github.com/airakibul/htb-rag",
+                "X-Title": "HTB-RAG-Assistant",
+            },
+        )
+        models_to_try = [OPENROUTER_MODEL] + [m for m in OPENROUTER_FALLBACK_MODELS if m != OPENROUTER_MODEL]
+        for model in models_to_try:
+            try:
+                logger.info(f"Synthesizing answer via OpenRouter ({model})...")
+                response: Any = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    max_tokens=3000,
+                    temperature=0.1,
+                )
+                content = response.choices[0].message.content
+                if content and content.strip():
+                    return content.strip()
+            except Exception as exc:
+                err_str = str(exc)
+                logger.warning(f"OpenRouter model '{model}' failed: {err_str}")
+                # Account-level daily limit exceeded across all free models: stop immediately
+                if "free-models-per-day" in err_str:
+                    logger.error("🛑 OpenRouter daily limit reached for free models (50 requests/day). Add credits or supply a fresh OPENROUTER_API_KEY in .env.")
+                    break
+                continue
+    except Exception as exc:
+        logger.warning(f"OpenRouter client error: {exc}")
+    return None
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 #  Answer synthesis
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -110,7 +158,7 @@ def synthesize(
     query: str,
     retrieval_result: dict[str, Any],
 ) -> dict[str, Any]:
-    """Generate a cited answer from retrieved context via Groq.
+    """Generate a cited answer from retrieved context solely via OpenRouter.
 
     Returns::
 
@@ -131,51 +179,11 @@ def synthesize(
         },
     ]
 
-    client: Any = groq.Groq(api_key=GROQ_API_KEY)
-    answer_text: str = ""
+    answer_text = (
+        _call_openrouter(messages)
+        or "Insufficient data or OpenRouter rate limit reached to generate the answer."
+    )
 
-    # 1. Primary Groq model (openai/gpt-oss-120b)
-    try:
-        response: Any = client.chat.completions.create(
-            model=GROQ_LLM_MODEL,
-            messages=messages,
-            max_tokens=3000,
-            temperature=0.1,
-        )
-        content = response.choices[0].message.content
-        answer_text = (content or "").strip()
-        if not answer_text:
-            raise RuntimeError("Empty response from primary model")
-    except Exception as exc:
-        err_msg = str(exc).lower()
-        if "429" in str(exc) or "rate" in err_msg or "limit" in err_msg:
-            # 2. Secondary Groq model with separate quota (openai/gpt-oss-20b)
-            try:
-                resp2: Any = client.chat.completions.create(
-                    model="openai/gpt-oss-20b",
-                    messages=messages,
-                    max_tokens=2500,
-                    temperature=0.1,
-                )
-                content2 = resp2.choices[0].message.content
-                answer_text = (content2 or "").strip()
-            except Exception:  # noqa: BLE001
-                # 3. Ultimate fallback: Gemini Flash
-                try:
-                    genai.configure(api_key=GEMINI_API_KEY)
-                    gemini_model: Any = genai.GenerativeModel(
-                        model_name="models/gemini-flash-latest",
-                        system_instruction=SYSTEM_PROMPT,
-                    )
-                    g_resp: Any = gemini_model.generate_content(
-                        f"Context:\n{context}\n\nQuestion: {query}",
-                        generation_config={"temperature": 0.1, "max_output_tokens": 3000},
-                    )
-                    answer_text = (g_resp.text or "").strip()
-                except Exception as final_exc:
-                    raise final_exc from exc
-        else:
-            raise
 
     # ── Collect unique sources cited ─────────────────────────────────────
     chunks = retrieval_result.get("chunks", [])

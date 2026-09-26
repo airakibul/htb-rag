@@ -345,8 +345,9 @@ class HybridRetriever:
 
         # ── Cross-Encoder Re-Ranking ──────────────────────────────────────
         from src.reranker import rerank
-        rerank_pool = min(len(merged), max(effective_top_k * 3, candidate_pool))
+        rerank_pool = min(len(merged), 35)
         merged[:rerank_pool] = rerank(query, merged[:rerank_pool])
+
 
         # Source Diversification: allow max 1 chunk per machine for broad queries (max 2 for specific)
 

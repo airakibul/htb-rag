@@ -27,14 +27,38 @@ logger = logging.getLogger(__name__)
 from src.config import (
     CHROMA_DIR,
     EMBED_BATCH_SIZE,
+    EMBEDDING_MODEL_NAME,
     GEMINI_API_KEY,
-    GEMINI_EMBED_MODEL,
     GEMINI_VISION_MODEL,
     IMAGE_CACHE,
 )
 
-# ── Configure Gemini ─────────────────────────────────────────────────────────
-genai.configure(api_key=GEMINI_API_KEY)
+# ── Configure Gemini (optional for vision) ─────────────────────────────────
+if GEMINI_API_KEY and GEMINI_API_KEY != "your_gemini_key_here":
+    try:
+        genai_mod: Any = genai
+        genai_mod.configure(api_key=GEMINI_API_KEY)
+    except Exception as exc:
+        logger.warning(f"Could not configure Gemini: {exc}")
+
+# ── Lazy-loaded SentenceTransformer embedding model ────────────────────────
+_embed_model: Any = None
+
+
+def _get_embed_model() -> Any:
+    """Lazy-load the local SentenceTransformer embedding model."""
+    global _embed_model
+    if _embed_model is None:
+        try:
+            from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
+            logger.info(f"Loading local SentenceTransformer model: {EMBEDDING_MODEL_NAME}...")
+            _embed_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+            logger.info(f"✅ Loaded SentenceTransformer model: {EMBEDDING_MODEL_NAME}")
+        except Exception as exc:
+            logger.error(f"❌ Failed to load SentenceTransformer: {exc}")
+            raise
+    return _embed_model
+
 
 # ── Regex / patterns ─────────────────────────────────────────────────────────
 _IMG_URL_RE = re.compile(r"!\[.*?\]\((https?://\S+?)\)")
@@ -142,8 +166,8 @@ class FallbackVectorCollection:
 #  Text Embedding
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _local_hash_embedding(text: str, dim: int = 768) -> list[float]:
-    """Deterministic 768-dim feature hash vectorizer fallback."""
+def _local_hash_embedding(text: str, dim: int = 384) -> list[float]:
+    """Deterministic 384-dim feature hash vectorizer fallback."""
     tokens = re.findall(r"\w+", text.lower())
     if not tokens:
         return [0.0] * dim
@@ -160,53 +184,32 @@ def _local_hash_embedding(text: str, dim: int = 768) -> list[float]:
 
 
 def embed_texts(texts: list[str], max_retries: int = 3) -> list[list[float]]:
-    """Batch-embed multiple texts using Gemini with exponential backoff on rate limits."""
-    for attempt in range(max_retries):
-        try:
-            result: Any = genai.embed_content(
-                model=GEMINI_EMBED_MODEL,
-                content=texts,
-                task_type="RETRIEVAL_DOCUMENT",
-            )
-            raw = result.get("embedding", [])
-            return [list(e) if isinstance(e, (list, tuple)) else [float(e)] for e in raw]
-        except Exception as exc:
-            err_str = str(exc).lower()
-            if ("429" in str(exc) or "rate" in err_str or "quota" in err_str) and attempt < max_retries - 1:
-                wait_sec = (attempt + 1) * 3
-                logger.warning(f"⚠️ Gemini rate limit (429). Retrying in {wait_sec}s... (attempt {attempt + 1}/{max_retries})")
-                time.sleep(wait_sec)
-                continue
-            if not GEMINI_API_KEY or "api_key" in err_str:
-                logger.warning("No valid Gemini API key configured; using deterministic offline hash vectorizer.")
-                return [_local_hash_embedding(t) for t in texts]
-            raise
-    raise RuntimeError("Failed to generate embeddings after max retries")
+    """Batch-embed multiple texts using local SentenceTransformer with zero rate limits."""
+    if not texts:
+        return []
+    try:
+        model = _get_embed_model()
+        embeddings = model.encode(
+            texts,
+            batch_size=min(len(texts), 128),
+            show_progress_bar=False,
+            normalize_embeddings=True,
+        )
+        return embeddings.tolist()
+    except Exception as exc:
+        logger.warning(f"SentenceTransformer failed ({exc}); falling back to local hash vectorizer.")
+        return [_local_hash_embedding(t, dim=384) for t in texts]
 
 
 def embed_query(text: str, max_retries: int = 3) -> list[float]:
-    """Embed a single query string with exponential backoff on rate limits."""
-    for attempt in range(max_retries):
-        try:
-            result: Any = genai.embed_content(
-                model=GEMINI_EMBED_MODEL,
-                content=text,
-                task_type="RETRIEVAL_QUERY",
-            )
-            raw = result.get("embedding", [])
-            return [float(x) for x in raw]
-        except Exception as exc:
-            err_str = str(exc).lower()
-            if ("429" in str(exc) or "rate" in err_str or "quota" in err_str) and attempt < max_retries - 1:
-                wait_sec = (attempt + 1) * 2
-                logger.warning(f"⚠️ Gemini query rate limit (429). Retrying in {wait_sec}s... (attempt {attempt + 1}/{max_retries})")
-                time.sleep(wait_sec)
-                continue
-            if not GEMINI_API_KEY or "api_key" in err_str:
-                logger.warning("No valid Gemini API key configured; using deterministic offline hash vectorizer.")
-                return _local_hash_embedding(text)
-            raise
-    raise RuntimeError("Failed to generate query embedding after max retries")
+    """Embed a single query string using local SentenceTransformer."""
+    try:
+        model = _get_embed_model()
+        embedding = model.encode(text, normalize_embeddings=True)
+        return embedding.tolist()
+    except Exception as exc:
+        logger.warning(f"SentenceTransformer query failed ({exc}); falling back to local hash vectorizer.")
+        return _local_hash_embedding(text, dim=384)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -240,11 +243,13 @@ def _save_image_cache(cache: dict[str, str]) -> None:
 
 
 def describe_image(url: str) -> str | None:
-    """Describe a screenshot using Gemini Vision (``gemini-1.5-flash``).
+    """Describe a screenshot using Gemini Vision (``gemini-2.5-flash``).
 
     Results are cached to :pydata:`IMAGE_CACHE`.
-    Returns ``None`` on any error — never crashes.
+    Returns ``None`` on any error or missing key — never crashes.
     """
+    if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_key_here":
+        return None
     try:
         cache = _load_image_cache()
         key = hashlib.md5(url.encode()).hexdigest()
@@ -258,7 +263,8 @@ def describe_image(url: str) -> str | None:
         img = Image.open(io.BytesIO(resp.content))
 
         # Vision model
-        model = genai.GenerativeModel(GEMINI_VISION_MODEL)
+        genai_mod: Any = genai
+        model = genai_mod.GenerativeModel(GEMINI_VISION_MODEL)
         response = model.generate_content([_VISION_PROMPT, img])
         description = response.text.strip()
 
@@ -289,7 +295,7 @@ def get_image_urls(markdown_text: str) -> list[str]:
 #  ChromaDB Storage
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _get_client() -> chromadb.ClientAPI:
+def _get_client() -> Any:
     """Return a ChromaDB ``PersistentClient`` rooted at ``CHROMA_DIR``."""
     Path(CHROMA_DIR).mkdir(parents=True, exist_ok=True)
     return chromadb.PersistentClient(path=CHROMA_DIR)
@@ -373,11 +379,21 @@ def store_chunks(
                 image_chunks.append(img_chunk)
 
     all_chunks = chunks + image_chunks
-    total = len(all_chunks)
+
+    # ── Deduplicate chunks by ID to prevent DuplicateIDError in ChromaDB ─
+    deduped_chunks: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for c in all_chunks:
+        cid = _chunk_id(c)
+        if cid not in seen_ids:
+            seen_ids.add(cid)
+            deduped_chunks.append(c)
+
+    total = len(deduped_chunks)
 
     # ── Batch embed & upsert ─────────────────────────────────────────────
     for start in range(0, total, EMBED_BATCH_SIZE):
-        batch = all_chunks[start : start + EMBED_BATCH_SIZE]
+        batch = deduped_chunks[start : start + EMBED_BATCH_SIZE]
         texts = [c["text"] for c in batch]
 
         embeddings = embed_texts(texts)
