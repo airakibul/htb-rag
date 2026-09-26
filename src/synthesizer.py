@@ -8,6 +8,7 @@ calls the OpenRouter chat API with a strict cybersecurity system prompt.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from src.config import (
@@ -27,6 +28,10 @@ SYSTEM_PROMPT = """\
 You are a cybersecurity analyst assistant specialized in offensive security.
 Answer questions strictly from the provided HTB writeup excerpts.
 
+IMPORTANT:
+- Output ONLY the final cheatsheet/answer directly in clean markdown.
+- Do NOT output any internal thoughts, reasoning steps, or planning notes ('We need to...', 'Let\\'s analyze...', 'Thinking Process:'). Start immediately with the markdown answer.
+
 Rules:
 1. Use ONLY information from the provided context. Never use your training data.
 2. After every technique or finding, cite the machine:
@@ -36,11 +41,11 @@ Rules:
 4. If context lacks sufficient info, say:
    "Insufficient data in the retrieved writeups."
 5. Never invent CVE numbers, tool flags, usernames, or machine names.
-6. Use bullet points for cheatsheet answers. Be concise but complete.
+6. Use bullet points for cheatsheet answers with explicit tool commands in code blocks or inline backticks. Be concise but complete.
 """
 
 # ── Context size budget ──────────────────────────────────────────────────────
-_MAX_CONTEXT_CHARS = 16000
+_MAX_CONTEXT_CHARS = 10000
 _MAX_CHUNK_CHARS   = 1200
 
 
@@ -108,6 +113,41 @@ def format_context(retrieval_result: dict[str, Any]) -> str:
 #  LLM Provider Helpers
 # ═════════════════════════════════════════════════════════════════════════════
 
+def _clean_response(text: str) -> str:
+    """Strip chain-of-thought artifacts, reasoning monologues, and repair unclosed markdown."""
+    if not text:
+        return ""
+
+    cleaned = text
+
+    # 1. Strip explicit <think>...</think> tags
+    cleaned = re.sub(r"<think>.*?</think>", "", cleaned, flags=re.DOTALL)
+
+    # 2. Strip thinking process headers if a model leaks internal monologue
+    if "Here's a thinking process:" in cleaned:
+        m = re.search(r"\n(#+\s+|###?\s+Recon|###?\s+Foothold|[-*]\s+\*\*|[-*]\s+`|[A-Z][a-z]+:)", cleaned)
+        if m:
+            cleaned = cleaned[m.start():]
+
+    # 3. Strip leading reasoning paragraphs like "We need to answer: ... Let's extract ..."
+    if cleaned.lstrip().startswith("We need to answer:") or cleaned.lstrip().startswith("We must use only"):
+        m = re.search(r"\n(#+\s+|Recon\b|Foothold\b|[-*]\s+)", cleaned)
+        if m:
+            cleaned = cleaned[m.start():]
+
+    cleaned = cleaned.strip()
+
+    # 4. Repair unclosed multi-line code fences ```
+    if cleaned.count("```") % 2 != 0:
+        cleaned += "\n```"
+
+    # 5. Repair unclosed inline code backticks `
+    if cleaned.count("`") % 2 != 0:
+        cleaned += "`"
+
+    return cleaned
+
+
 def _call_openrouter(messages: Any) -> str | None:
     """Generate answer using OpenRouter API with free models and fallbacks."""
     if not OPENROUTER_API_KEY or OPENROUTER_API_KEY == "your_openrouter_key_here":
@@ -117,7 +157,7 @@ def _call_openrouter(messages: Any) -> str | None:
         client: Any = OpenAI(
             base_url=OPENROUTER_BASE_URL,
             api_key=OPENROUTER_API_KEY,
-            timeout=25.0,
+            timeout=30.0,
             max_retries=0,  # Fail fast on rate limits without wasting time on retries
             default_headers={
                 "HTTP-Referer": "https://github.com/airakibul/htb-rag",
@@ -131,12 +171,14 @@ def _call_openrouter(messages: Any) -> str | None:
                 response: Any = client.chat.completions.create(
                     model=model,
                     messages=messages,
-                    max_tokens=3000,
+                    max_tokens=3500,
                     temperature=0.1,
                 )
                 content = response.choices[0].message.content
                 if content and content.strip():
-                    return content.strip()
+                    cleaned = _clean_response(content.strip())
+                    if cleaned:
+                        return cleaned
             except Exception as exc:
                 err_str = str(exc)
                 logger.warning(f"OpenRouter model '{model}' failed: {err_str}")

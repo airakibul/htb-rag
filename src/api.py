@@ -58,6 +58,8 @@ class QueryResponse(BaseModel):
     chunks_used: int
     graph_used: bool
     query: str
+    chunks: list[dict[str, Any]] = []
+    graph: dict[str, Any] = {}
 
 
 class RetrieveRequest(BaseModel):
@@ -150,7 +152,7 @@ async def index():
 
 
 @app.post("/query", response_model=QueryResponse)
-async def query(req: QueryRequest):
+def query(req: QueryRequest):
     """Retrieve context **and** synthesise a cited answer."""
     retriever: HybridRetriever = get_retriever()
 
@@ -169,6 +171,8 @@ async def query(req: QueryRequest):
         chunks_used=result["chunks_used"],
         graph_used=result["graph_used"],
         query=req.question,
+        chunks=retrieval.get("chunks", []),
+        graph=retrieval.get("graph", {}),
     )
 
 
@@ -239,7 +243,7 @@ async def machine_detail(machine_name: str):
 
 
 @app.post("/retrieve")
-async def retrieve_raw(req: RetrieveRequest):
+def retrieve_raw(req: RetrieveRequest):
     """Raw retrieval result (no synthesis) — useful for debug / eval."""
     retriever: HybridRetriever = get_retriever()
 

@@ -138,31 +138,23 @@ document.addEventListener('DOMContentLoaded', () => {
         difficulty: diffFilter.value || null,
       };
 
-      // Also fetch raw retrieval for the chunks accordion in parallel
-      const [queryResp, retrieveResp] = await Promise.all([
-        fetch('/query', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        }),
-        fetch('/retrieve', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question: query, top_k: parseInt(topKSlider.value, 10) }),
-        })
-      ]);
+      const queryResp = await fetch('/query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
 
       if (!queryResp.ok) {
         throw new Error(`Server returned error ${queryResp.status}`);
       }
 
       const queryData = await queryResp.json();
-      const retrieveData = retrieveResp.ok ? await retrieveResp.json() : null;
 
       const duration = ((performance.now() - startTime) / 1000).toFixed(2);
       timingBadge.textContent = `⏱️ ${duration}s`;
 
-      renderResults(query, queryData, retrieveData);
+      // queryData already contains answer, sources, chunks, and graph findings
+      renderResults(query, queryData, queryData);
 
     } catch (err) {
       console.error(err);

@@ -27,11 +27,11 @@ GROQ_API_KEY = ""
 # ── Model identifiers ────────────────────────────────────────────────────────
 # OpenRouter LLM Configuration (Free Tier Models)
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
 OPENROUTER_FALLBACK_MODELS = [
     "qwen/qwen3.8-27b:free",
-    "google/gemma-4-31b-it:free",
-    "nvidia/nemotron-3.5-lightning:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
     "openrouter/free",
 ]
 
