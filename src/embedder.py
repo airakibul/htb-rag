@@ -54,7 +54,7 @@ class FallbackVectorCollection:
         if self.file_path.exists():
             try:
                 return json.loads(self.file_path.read_text(encoding="utf-8"))
-            except Exception:
+            except (json.JSONDecodeError, OSError):
                 return {}
         return {}
 
@@ -159,36 +159,54 @@ def _local_hash_embedding(text: str, dim: int = 768) -> list[float]:
     return vec.tolist()
 
 
-def embed_texts(texts: list[str]) -> list[list[float]]:
-    """Batch-embed multiple texts using Gemini with fast local hash vectorizer fallback."""
-    try:
-        result = genai.embed_content(
-            model=GEMINI_EMBED_MODEL,
-            content=texts,
-            task_type="RETRIEVAL_DOCUMENT",
-        )
-        return result["embedding"]
-    except Exception as exc:
-        err_str = str(exc).lower()
-        if "429" in str(exc) or "rate" in err_str or "quota" in err_str:
-            return [_local_hash_embedding(t) for t in texts]
-        raise
+def embed_texts(texts: list[str], max_retries: int = 3) -> list[list[float]]:
+    """Batch-embed multiple texts using Gemini with exponential backoff on rate limits."""
+    for attempt in range(max_retries):
+        try:
+            result: Any = genai.embed_content(
+                model=GEMINI_EMBED_MODEL,
+                content=texts,
+                task_type="RETRIEVAL_DOCUMENT",
+            )
+            raw = result.get("embedding", [])
+            return [list(e) if isinstance(e, (list, tuple)) else [float(e)] for e in raw]
+        except Exception as exc:
+            err_str = str(exc).lower()
+            if ("429" in str(exc) or "rate" in err_str or "quota" in err_str) and attempt < max_retries - 1:
+                wait_sec = (attempt + 1) * 3
+                logger.warning(f"⚠️ Gemini rate limit (429). Retrying in {wait_sec}s... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(wait_sec)
+                continue
+            if not GEMINI_API_KEY or "api_key" in err_str:
+                logger.warning("No valid Gemini API key configured; using deterministic offline hash vectorizer.")
+                return [_local_hash_embedding(t) for t in texts]
+            raise
+    raise RuntimeError("Failed to generate embeddings after max retries")
 
 
-def embed_query(text: str) -> list[float]:
-    """Embed a single query string."""
-    try:
-        result = genai.embed_content(
-            model=GEMINI_EMBED_MODEL,
-            content=text,
-            task_type="RETRIEVAL_QUERY",
-        )
-        return result["embedding"]
-    except Exception as exc:
-        err_str = str(exc).lower()
-        if "429" in str(exc) or "rate" in err_str or "quota" in err_str:
-            return _local_hash_embedding(text)
-        raise
+def embed_query(text: str, max_retries: int = 3) -> list[float]:
+    """Embed a single query string with exponential backoff on rate limits."""
+    for attempt in range(max_retries):
+        try:
+            result: Any = genai.embed_content(
+                model=GEMINI_EMBED_MODEL,
+                content=text,
+                task_type="RETRIEVAL_QUERY",
+            )
+            raw = result.get("embedding", [])
+            return [float(x) for x in raw]
+        except Exception as exc:
+            err_str = str(exc).lower()
+            if ("429" in str(exc) or "rate" in err_str or "quota" in err_str) and attempt < max_retries - 1:
+                wait_sec = (attempt + 1) * 2
+                logger.warning(f"⚠️ Gemini query rate limit (429). Retrying in {wait_sec}s... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(wait_sec)
+                continue
+            if not GEMINI_API_KEY or "api_key" in err_str:
+                logger.warning("No valid Gemini API key configured; using deterministic offline hash vectorizer.")
+                return _local_hash_embedding(text)
+            raise
+    raise RuntimeError("Failed to generate query embedding after max retries")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -284,7 +302,8 @@ def get_collection(
     try:
         client = _get_client()
         return client.get_or_create_collection(name=collection_name)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"ChromaDB client error ({exc}), using FallbackVectorCollection")
         return FallbackVectorCollection(CHROMA_DIR, collection_name)
 
 

@@ -165,8 +165,9 @@ Start the FastAPI application using Uvicorn:
 uvicorn src.api:app --reload --port 8000
 ```
 
-Once started, open your browser to view the interactive Swagger API documentation:
-👉 **[http://localhost:8000/docs](http://localhost:8000/docs)**
+Once started, open your browser to interact with the system:
+- 🖥️ **Interactive Web Dashboard:** 👉 **[http://localhost:8000](http://localhost:8000)**
+- 📖 **Interactive Swagger API Docs:** 👉 **[http://localhost:8000/docs](http://localhost:8000/docs)**
 
 ---
 

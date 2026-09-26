@@ -44,3 +44,12 @@ def test_query_graph_empty(sample_chunks: list[dict]):
     assert result["matched_tools"] == []
     assert result["matched_cves"] == []
     assert result["relevant_machines"] == []
+    assert "technique_machines" in result
+    assert result["technique_machines"] == {}
+
+
+def test_query_graph_returns_technique_machines(sample_chunks: list[dict]):
+    graph = build_graph(sample_chunks)
+    result = query_graph(graph, "SUID privilege escalation")
+    assert "technique_machines" in result
+    assert isinstance(result["technique_machines"], dict)

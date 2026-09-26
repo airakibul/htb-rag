@@ -17,7 +17,7 @@ if str(project_root) not in sys.path:
 if hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8")
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
 
 import logging
@@ -26,7 +26,8 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -71,10 +72,17 @@ class RetrieveRequest(BaseModel):
 _state: dict[str, Any] = {}
 
 
+def get_retriever() -> HybridRetriever:
+    """Safe getter for the HybridRetriever singleton."""
+    if "retriever" not in _state:
+        _state["retriever"] = HybridRetriever()
+    return _state["retriever"]
+
+
 @asynccontextmanager
-async def lifespan(app: FastAPI):  # noqa: ARG001
+async def lifespan(app: FastAPI):
     """Initialise the HybridRetriever singleton on startup."""
-    retriever = HybridRetriever()
+    retriever = get_retriever()
 
     if not retriever.docs:
         logger.warning("⚠️  No chunks indexed. Run: python -m src.ingest")
@@ -83,10 +91,8 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
     try:
         from src.reranker import _get_model
         _get_model()
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass  # Non-critical — will lazy-load on first query
-
-    _state["retriever"] = retriever
 
     yield
     _state.clear()
@@ -116,11 +122,26 @@ app.add_middleware(
 # ── Global error handler ────────────────────────────────────────────────────
 
 @app.exception_handler(Exception)
-async def _global_error(request: Request, exc: Exception):  # noqa: ARG001
+async def _global_error(request: Request, exc: Exception):
     return JSONResponse(
         status_code=500,
         content={"detail": str(exc)},
     )
+
+
+# ── Static Files & Dashboard Mount ──────────────────────────────────────────
+_static_dir = project_root / "static"
+if _static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
+
+@app.get("/", include_in_schema=False)
+async def index():
+    """Serve the interactive web dashboard."""
+    index_file = _static_dir / "index.html"
+    if index_file.exists():
+        return FileResponse(str(index_file))
+    return JSONResponse({"status": "ok", "message": "HTB RAG API is running. Visit /docs for Swagger UI."})
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -131,7 +152,7 @@ async def _global_error(request: Request, exc: Exception):  # noqa: ARG001
 @app.post("/query", response_model=QueryResponse)
 async def query(req: QueryRequest):
     """Retrieve context **and** synthesise a cited answer."""
-    retriever: HybridRetriever = _state["retriever"]
+    retriever: HybridRetriever = get_retriever()
 
     retrieval = retriever.retrieve(
         query=req.question,
@@ -154,7 +175,7 @@ async def query(req: QueryRequest):
 @app.get("/health")
 async def health():
     """Liveness / readiness probe with index stats."""
-    retriever: HybridRetriever = _state["retriever"]
+    retriever: HybridRetriever = get_retriever()
     graph = retriever.graph
     return {
         "status": "ok",
@@ -167,7 +188,7 @@ async def health():
 @app.get("/machines")
 async def machines():
     """Sorted list of all machine node names in the knowledge graph."""
-    retriever: HybridRetriever = _state["retriever"]
+    retriever: HybridRetriever = get_retriever()
     graph = retriever.graph
     return sorted(
         n for n, d in graph.nodes(data=True)
@@ -178,7 +199,7 @@ async def machines():
 @app.get("/techniques")
 async def techniques():
     """Sorted list of all technique node names in the knowledge graph."""
-    retriever: HybridRetriever = _state["retriever"]
+    retriever: HybridRetriever = get_retriever()
     graph = retriever.graph
     return sorted(
         n for n, d in graph.nodes(data=True)
@@ -189,7 +210,7 @@ async def techniques():
 @app.get("/machine/{machine_name}")
 async def machine_detail(machine_name: str):
     """Return metadata, techniques, tools, and CVEs for a single machine."""
-    retriever: HybridRetriever = _state["retriever"]
+    retriever: HybridRetriever = get_retriever()
     graph = retriever.graph
 
     if machine_name not in graph:
@@ -220,7 +241,7 @@ async def machine_detail(machine_name: str):
 @app.post("/retrieve")
 async def retrieve_raw(req: RetrieveRequest):
     """Raw retrieval result (no synthesis) — useful for debug / eval."""
-    retriever: HybridRetriever = _state["retriever"]
+    retriever: HybridRetriever = get_retriever()
 
     result = retriever.retrieve(
         query=req.question,

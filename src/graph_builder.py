@@ -12,16 +12,19 @@ import logging
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8")
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
 
 import networkx as nx
-from networkx.readwrite import node_link_data, node_link_graph
+from networkx.readwrite import (  # type: ignore[import-untyped]
+    node_link_data,
+    node_link_graph,
+)
 
 from src.config import GRAPH_PATH
 
@@ -472,9 +475,8 @@ def build_graph(all_chunks: list[dict[str, Any]]) -> nx.DiGraph:
                 # Link relevant tools to technique
                 for tool in tools:
                     t_clean = tool.lower().strip()
-                    if t_clean in patterns or any(t_clean in p for p in patterns):
-                        if not G.has_edge(t_clean, tech_name):
-                            G.add_edge(t_clean, tech_name, rel="enables")
+                    if (t_clean in patterns or any(t_clean in p for p in patterns)) and not G.has_edge(t_clean, tech_name):
+                        G.add_edge(t_clean, tech_name, rel="enables")
 
                 # Link CVEs to technique
                 for cve in cves:
@@ -485,7 +487,7 @@ def build_graph(all_chunks: list[dict[str, Any]]) -> nx.DiGraph:
         # ── Heading-based technique extraction (h3 or h2) ────────────────
         target_heading = h3 if (h3 and _is_technique(h3)) else (h2 if (h2 and _is_technique(h2)) else "")
         if target_heading:
-            clean_head = re.sub(r"^(privesc\s*#?\d*|exploit\s*#?\d*)\s*[-:]\s*", "", target_heading, flags=re.I).strip()
+            clean_head = re.sub(r"^(privesc\s*#?\d*|exploit\s*#?\d*)\s*[-:]\s*", "", target_heading, flags=re.IGNORECASE).strip()
             if not clean_head:
                 clean_head = target_heading.strip()
 
@@ -531,7 +533,7 @@ def load_graph() -> nx.DiGraph:
     path = Path(GRAPH_PATH)
     if path.exists():
         data = json.loads(path.read_text(encoding="utf-8"))
-        return node_link_graph(data, directed=True)
+        return cast(nx.DiGraph, node_link_graph(data, directed=True))
     return nx.DiGraph()
 
 
@@ -598,7 +600,7 @@ def get_cves_for_machine(
 
 def query_graph(
     graph: nx.DiGraph, query: str,
-) -> dict[str, list[str]]:
+) -> dict[str, Any]:
     """Match a free-text *query* against the knowledge graph.
 
     Checks category keywords, canonical techniques, tool nodes, and CVE patterns.
@@ -703,9 +705,27 @@ def query_graph(
             if any(graph.edges[m, succ].get("rel") == "os" and succ == "linux" for succ in graph.successors(m))
         }
 
+    # Map matched techniques to machines that demonstrate them (with OS filtering)
+    technique_machines: dict[str, list[str]] = {}
+    for tech in matched_techniques:
+        tech_machs = get_machines_for_technique(graph, tech)
+        if "windows" in low and "linux" not in low:
+            tech_machs = [
+                m for m in tech_machs
+                if any(graph.edges[m, succ].get("rel") == "os" and succ == "windows" for succ in graph.successors(m))
+            ]
+        elif "linux" in low and "windows" not in low:
+            tech_machs = [
+                m for m in tech_machs
+                if any(graph.edges[m, succ].get("rel") == "os" and succ == "linux" for succ in graph.successors(m))
+            ]
+        if tech_machs:
+            technique_machines[tech] = tech_machs[:6]
+
     return {
         "matched_categories": sorted(matched_categories),
         "matched_techniques": matched_techniques,
+        "technique_machines": technique_machines,
         "matched_tools":      matched_tools,
         "matched_cves":       matched_cves,
         "relevant_machines":  sorted(machines),
