@@ -8,6 +8,7 @@ and retrieves relational topology.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import networkx as nx
@@ -125,7 +126,19 @@ def query_graph(
     matched_cves: list[str] = sorted(cve_regex_matches | cve_alias_matches)
 
     # ── Techniques (canonical pattern match, direct name match, or aliases) ───
-    GENERIC_CATEGORY_TECHNIQUES = {
+    # ── Techniques (canonical pattern match, direct name match, or aliases) ───
+    GENERIC_TECHNIQUES = {
+        "exploit",
+        "exploitation",
+        "intended",
+        "shortcut",
+        "privesc",
+        "privilege escalation",
+        "escalation",
+        "template injection",
+        "server side template injection",
+    }
+    CATEGORY_LEVEL_TECHNIQUES = {
         "Active Directory Exploitation",
         "Windows Privilege Escalation",
         "Linux Privilege Escalation",
@@ -145,27 +158,41 @@ def query_graph(
         if hit and tech in graph:
             canonical_matches.append(tech)
 
-    specific_canonical = [t for t in canonical_matches if t not in GENERIC_CATEGORY_TECHNIQUES]
+    specific_canonical = [t for t in canonical_matches if t not in CATEGORY_LEVEL_TECHNIQUES]
     priority_techniques = specific_canonical if specific_canonical else canonical_matches
 
-    # 2. Direct name or alias matches
+    # 2. Direct name or alias matches with word boundary check
     direct_techniques: list[str] = list(priority_techniques)
     for node, data in graph.nodes(data=True):
         if data.get("type") == "technique" and node not in direct_techniques:
-            node_low = node.lower()
-            aliases = [a.lower() for a in data.get("aliases", [])]
-            if node_low in low or any(alias in low for alias in aliases):
+            node_low = node.lower().strip()
+            if node_low in GENERIC_TECHNIQUES or len(node_low) < 3:
+                continue
+            aliases = [a.lower().strip() for a in data.get("aliases", [])]
+            matched = False
+            if re.search(rf"\b{re.escape(node_low)}\b", low):
+                matched = True
+            elif any(re.search(rf"\b{re.escape(alias)}\b", low) for alias in aliases if len(alias) >= 3):
+                matched = True
+            if matched:
                 direct_techniques.append(node)
 
-    # 3. Category techniques (fallback / broad cheatsheets)
-    category_techniques: list[str] = [
+    # Filter out umbrella category-level techniques if specific techniques exist
+    if any(t not in CATEGORY_LEVEL_TECHNIQUES and t not in GENERIC_TECHNIQUES for t in direct_techniques):
+        direct_techniques = [t for t in direct_techniques if t not in CATEGORY_LEVEL_TECHNIQUES and t.lower() not in GENERIC_TECHNIQUES]
+
+    category_techniques = [
         tech
         for cat in matched_categories
         for tech in get_techniques_for_category(graph, cat)
-        if tech not in direct_techniques
+        if tech not in direct_techniques and tech.lower() not in GENERIC_TECHNIQUES
     ]
 
-    matched_techniques: list[str] = direct_techniques + sorted(category_techniques)
+    # 3. Category techniques (fallback for broad cheatsheets when no specific techniques are matched)
+    if not direct_techniques and matched_categories:
+        matched_techniques = sorted(category_techniques)
+    else:
+        matched_techniques = list(direct_techniques)
 
     # ── Relevant machines (reachable from matches) ───────────────────────
     machines: set[str] = set()

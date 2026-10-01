@@ -266,14 +266,11 @@ class HybridRetriever:
 
         # ── Scope-based Top-K and Candidate Pool ────────────────────────────
         scope = intent.get("scope", "specific")
-        is_broad = (scope in ("broad", "technique_listing"))
+        is_broad = (scope == "broad")
 
-        if scope == "broad":
+        if is_broad:
             effective_top_k = max(top_k, 25)
             candidate_pool = 100
-        elif scope == "technique_listing":
-            effective_top_k = min(top_k, 10) if top_k else 8
-            candidate_pool = 40
         else:
             effective_top_k = min(top_k, 8) if top_k else 6
             candidate_pool = 35
@@ -391,23 +388,9 @@ class HybridRetriever:
         # ── Graph-Assisted Manifest Injection ──────────────────
         manifest = None
         if is_broad:
-            # For technique-listing queries: use ONLY direct technique matches
-            direct_techs = graph_hits.get("matched_techniques", [])
-            matched_cats = graph_hits.get("matched_categories", [])
-
-            # If query has specific technique keywords, prefer technique-level manifest
-            if direct_techs and len(matched_cats) <= 2 and scope == "technique_listing":
-                # Build technique-focused manifest (not category-level)
-                manifest = self.graph_store.get_technique_manifest(
-                    techniques=direct_techs[:5], os_filter=os_val
-                )
-            elif scope == "technique_listing":
-                manifest = self.graph_store.get_technique_manifest_for_query(query, os_filter=os_val)
-            else:
-                manifest = self.graph_store.get_manifest_for_query(query, os_filter=os_val)
-
+            manifest = self.graph_store.get_manifest_for_query(query, os_filter=os_val)
             if manifest:
-                logger.info(f"📋 Manifest injection: {len(manifest)} machines for query")
+                logger.info(f"📋 Manifest injection: {len(manifest)} machines for broad query")
 
 
         return RetrievalResult(

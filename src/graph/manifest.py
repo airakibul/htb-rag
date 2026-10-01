@@ -43,8 +43,12 @@ def _find_graph_node(graph: nx.DiGraph, name: str) -> str | None:
 
 GENERIC_TECHNIQUES: set[str] = {
     "exploit",
+    "exploitation",
     "intended",
     "shortcut",
+    "privesc",
+    "privilege escalation",
+    "escalation",
     "template injection",
     "server side template injection",
 }
@@ -54,14 +58,14 @@ def generate_machine_manifest(
     graph: nx.DiGraph,
     technique_or_category: str,
 ) -> list[dict[str, Any]]:
-    """Return a compact manifest for all machines demonstrating a technique/category.
+    """Return a compact manifest for all machines demonstrating a technique, tool, CVE, or category.
 
     Parameters
     ----------
     graph : nx.DiGraph
         The HTB knowledge graph.
     technique_or_category : str
-        Target technique name or domain category.
+        Target technique, tool, CVE name, or domain category.
 
     Returns
     -------
@@ -83,32 +87,31 @@ def generate_machine_manifest(
     # 2. If it's a category node, find all technique nodes belonging to it
     node_type = graph.nodes[matched_node].get("type")
     if node_type == "category":
-        techniques = sorted(
+        targets = sorted(
             t for t in graph.predecessors(matched_node)
             if graph.nodes[t].get("type") == "technique"
             and str(t).lower().strip() not in GENERIC_TECHNIQUES
         )
-    elif node_type == "technique":
-        techniques = [matched_node]
+    elif node_type in ("technique", "tool", "cve"):
+        targets = [matched_node]
     else:
         tech_preds = [
             t for t in graph.predecessors(matched_node)
             if graph.nodes[t].get("type") == "technique"
         ]
-        techniques = sorted(tech_preds) if tech_preds else [matched_node]
+        targets = sorted(tech_preds) if tech_preds else [matched_node]
 
-    # 3. For each technique, find all machine nodes connected via 'demonstrates' edges
+    # 3. For each target, find all machine nodes connected via relevant edges
     machine_map: dict[str, dict[str, Any]] = {}
-    for tech in techniques:
-        # Predecessors: machine -> technique
-        for p in graph.predecessors(tech):
+    for target in targets:
+        # Predecessors: machine -> target
+        for p in graph.predecessors(target):
             if graph.nodes[p].get("type") != "machine":
                 continue
-            rel = str(graph.edges[p, tech].get("rel", ""))
-            if "demonstrate" in rel or "use" in rel:
+            rel = str(graph.edges[p, target].get("rel", ""))
+            if any(r in rel for r in ("demonstrate", "use", "exploit")):
                 m = p
                 if m not in machine_map:
-                    # 4. For each machine, extract OS (from 'os' edge successor) and difficulty (from node attrs)
                     os_val = "unknown"
                     for succ in graph.successors(m):
                         if graph.edges[m, succ].get("rel") == "os":
@@ -125,14 +128,14 @@ def generate_machine_manifest(
                         "difficulty": diff_val,
                         "techniques": set(),
                     }
-                machine_map[m]["techniques"].add(tech)
+                machine_map[m]["techniques"].add(target)
 
-        # Successors: technique -> machine (if any)
-        for succ in graph.successors(tech):
+        # Successors: target -> machine (if any)
+        for succ in graph.successors(target):
             if graph.nodes[succ].get("type") != "machine":
                 continue
-            rel = str(graph.edges[tech, succ].get("rel", ""))
-            if "demonstrate" in rel or "use" in rel:
+            rel = str(graph.edges[target, succ].get("rel", ""))
+            if any(r in rel for r in ("demonstrate", "use", "exploit")):
                 m = succ
                 if m not in machine_map:
                     os_val = "unknown"
@@ -151,10 +154,9 @@ def generate_machine_manifest(
                         "difficulty": diff_val,
                         "techniques": set(),
                     }
-                machine_map[m]["techniques"].add(tech)
+                machine_map[m]["techniques"].add(target)
 
-    # 5. Build and return the manifest list, sorted by machine name
-    # 6. Deduplicate machines that appear under multiple techniques
+    # 4. Build and return the manifest list, sorted by machine name
     manifest = [
         {
             "machine": m,
@@ -182,12 +184,13 @@ def generate_manifest_for_query(
     matched_categories = list(hits.get("matched_categories", []))
     matched_techniques = list(hits.get("matched_techniques", []))
 
-    # If ADCS is matched along with Active Directory, prioritize the more specific ADCS
+    # If both ADCS and broad Active Directory are matched, prioritize specific ADCS if query mentions cert/adcs
+    low = query.lower()
     if "ADCS" in matched_categories and "Active Directory" in matched_categories:
-        matched_categories = [c for c in matched_categories if c != "Active Directory"]
+        if any(w in low for w in ["adcs", "cert", "template", "esc"]):
+            matched_categories = [c for c in matched_categories if c != "Active Directory"]
 
     # Target OS resolution
-    low = query.lower()
     target_os = os_filter
     if not target_os:
         if "windows" in low and "linux" not in low:
@@ -248,63 +251,14 @@ def generate_technique_manifest(
     techniques: list[str],
     os_filter: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Return a compact manifest for all machines demonstrating any of the given techniques.
+    """Return a compact manifest for all machines demonstrating any of the given techniques/tools/CVEs.
 
-    Does NOT expand categories, preserving high precision for technique-listing queries.
+    Generic graph traversal over verified relationships without hardcoded tool special-cases.
     """
     combined: dict[str, dict[str, Any]] = {}
     for tech in techniques:
-        # Check high-precision tool node alternatives
-        if "sqlmap" in tech.lower() and "sqlmap" in graph:
-            for p in graph.predecessors("sqlmap"):
-                if graph.nodes[p].get("type") == "machine":
-                    diff = str(graph.nodes[p].get("difficulty", "unknown") or "unknown")
-                    os_val = "unknown"
-                    for s in graph.successors(p):
-                        if graph.edges[p, s].get("rel") == "os":
-                            os_val = s
-                            break
-                    if os_val == "unknown":
-                        os_val = str(graph.nodes[p].get("os", "unknown") or "unknown")
-                    if os_filter and os_val not in (os_filter, "unknown"):
-                        continue
-                    if p not in combined:
-                        combined[p] = {
-                            "machine": p,
-                            "os": os_val,
-                            "difficulty": diff,
-                            "techniques": {tech},
-                        }
-                    else:
-                        combined[p]["techniques"].add(tech)
+        if str(tech).lower().strip() in GENERIC_TECHNIQUES:
             continue
-
-        if ("evil-winrm" in tech.lower() or "winrm" in tech.lower()) and ("evil-winrm" in graph or "winrm" in graph):
-            for t in ["evil-winrm", "winrm"]:
-                if t in graph:
-                    for p in graph.predecessors(t):
-                        if graph.nodes[p].get("type") == "machine":
-                            diff = str(graph.nodes[p].get("difficulty", "unknown") or "unknown")
-                            os_val = "unknown"
-                            for s in graph.successors(p):
-                                if graph.edges[p, s].get("rel") == "os":
-                                    os_val = s
-                                    break
-                            if os_val == "unknown":
-                                os_val = str(graph.nodes[p].get("os", "unknown") or "unknown")
-                            if os_filter and os_val not in (os_filter, "unknown"):
-                                continue
-                            if p not in combined:
-                                combined[p] = {
-                                    "machine": p,
-                                    "os": os_val,
-                                    "difficulty": diff,
-                                    "techniques": {tech},
-                                }
-                            else:
-                                combined[p]["techniques"].add(tech)
-            continue
-
         for entry in generate_machine_manifest(graph, tech):
             m = entry["machine"]
             if os_filter and entry.get("os") not in (os_filter, "unknown"):
@@ -330,106 +284,18 @@ def generate_technique_manifest(
     ]
 
 
-GENERIC_CATEGORY_TECHNIQUES: set[str] = {
-    "Active Directory Exploitation",
-    "Windows Privilege Escalation",
-    "Linux Privilege Escalation",
-    "Password Cracking & Hash Dumping",
-}
-
-
 def get_technique_manifest_for_query(
     graph: nx.DiGraph,
     query: str,
     os_filter: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Extract targeted techniques or tools for listing queries and generate a tight manifest.
-
-    Prevents category-level over-expansion by matching directly to canonical techniques or
-    specific tool nodes.
-    """
-    low = query.lower()
-
-    # 1. High-precision tool nodes (sqlmap, evil-winrm)
-    if "sqlmap" in low and "sqlmap" in graph:
-        tool_machs = []
-        for p in graph.predecessors("sqlmap"):
-            if graph.nodes[p].get("type") == "machine":
-                diff = str(graph.nodes[p].get("difficulty", "unknown") or "unknown")
-                os_val = "unknown"
-                for s in graph.successors(p):
-                    if graph.edges[p, s].get("rel") == "os":
-                        os_val = s
-                        break
-                if os_val == "unknown":
-                    os_val = str(graph.nodes[p].get("os", "unknown") or "unknown")
-                if os_filter and os_val not in (os_filter, "unknown"):
-                    continue
-                tool_machs.append({
-                    "machine": p,
-                    "os": os_val,
-                    "difficulty": diff,
-                    "techniques": ["SQL Injection with sqlmap"],
-                })
-        return sorted(tool_machs, key=lambda x: x["machine"])
-
-    if ("evil-winrm" in low or "winrm" in low) and ("evil-winrm" in graph or "winrm" in graph):
-        tool_machs_map: dict[str, dict[str, Any]] = {}
-        for t in ["evil-winrm", "winrm"]:
-            if t in graph:
-                for p in graph.predecessors(t):
-                    if graph.nodes[p].get("type") == "machine":
-                        diff = str(graph.nodes[p].get("difficulty", "unknown") or "unknown")
-                        os_val = "unknown"
-                        for s in graph.successors(p):
-                            if graph.edges[p, s].get("rel") == "os":
-                                os_val = s
-                                break
-                        if os_val == "unknown":
-                            os_val = str(graph.nodes[p].get("os", "unknown") or "unknown")
-                        if os_filter and os_val not in (os_filter, "unknown"):
-                            continue
-                        if p not in tool_machs_map:
-                            tool_machs_map[p] = {
-                                "machine": p,
-                                "os": os_val,
-                                "difficulty": diff,
-                                "techniques": {"WinRM Shell Access"},
-                            }
-                        else:
-                            tool_machs_map[p]["techniques"].add("WinRM Shell Access")
-        return [
-            {
-                "machine": m,
-                "os": d["os"],
-                "difficulty": d["difficulty"],
-                "techniques": sorted(d["techniques"]),
-            }
-            for m, d in sorted(tool_machs_map.items())
-        ]
-
-    # 2. Match canonical techniques
-    from src.graph.builder import CANONICAL_TECHNIQUES
-
-    matched: list[str] = []
-    for tech, info in CANONICAL_TECHNIQUES.items():
-        patterns = info.get("patterns", [])
-        fb_pats = info.get("fallback_patterns", [])
-        fb_req = info.get("fallback_require", [])
-
-        hit = False
-        for p in patterns:
-            if p in low:
-                hit = True
-                break
-        if not hit and fb_pats and fb_req:
-            if any(p in low for p in fb_pats) and any(r in low for r in fb_req):
-                hit = True
-        if hit and tech in graph:
-            matched.append(tech)
-
-    specific_matched = [t for t in matched if t not in GENERIC_CATEGORY_TECHNIQUES]
-    chosen = specific_matched if specific_matched else matched
-
-    return generate_technique_manifest(graph, chosen, os_filter=os_filter)
-
+    """Extract targeted techniques, tools, or CVEs for a query and generate a clean manifest."""
+    hits = query_graph(graph, query)
+    matched_tools = list(hits.get("matched_tools", []))
+    matched_cves = list(hits.get("matched_cves", []))
+    matched_techs = [
+        t for t in hits.get("matched_techniques", [])
+        if str(t).lower().strip() not in GENERIC_TECHNIQUES
+    ]
+    targets = matched_tools + matched_cves + matched_techs
+    return generate_technique_manifest(graph, targets, os_filter=os_filter)
