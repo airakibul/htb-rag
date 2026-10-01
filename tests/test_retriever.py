@@ -1,6 +1,6 @@
 """Unit tests for retriever.py static/utility functions."""
 
-from src.retriever import HybridRetriever
+from src.pipeline.retriever import HybridRetriever
 
 
 def test_detect_query_intent_windows():

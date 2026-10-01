@@ -62,3 +62,10 @@ def test_is_decorative_image():
     assert is_decorative_image("https://example.com/uploads/burp_sqli_evidence.png") is False
     assert is_decorative_image("https://example.com/writeup_assets/nmap_scan_output.png") is False
 
+
+def test_sentence_transformer_fallback_hash_embedding():
+    from src.infrastructure.sentence_transformer import _local_hash_embedding
+    vec = _local_hash_embedding("test query", dim=384)
+    assert len(vec) == 384
+    assert isinstance(vec[0], float)
+

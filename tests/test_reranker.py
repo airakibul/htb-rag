@@ -1,6 +1,6 @@
 """Unit tests for reranker.py."""
 
-from src.reranker import rerank
+from src.infrastructure.cross_encoder import rerank
 
 
 def test_rerank_returns_same_length():

@@ -1,7 +1,7 @@
 """Unit tests for chunker.py."""
 
 from pathlib import Path
-from src.chunker import chunk_file
+from src.pipeline.chunker import chunk_file
 
 
 def test_normal_writeup_produces_chunks(sample_writeup_normal: Path):

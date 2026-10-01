@@ -2,7 +2,7 @@
 
 import networkx as nx
 import pytest
-from src.query_enhancer import enhance_query
+from src.pipeline.query_enhancer import enhance_query
 
 
 def test_enhance_detects_broad_scope():

@@ -1,6 +1,6 @@
 """Unit tests for synthesizer.py."""
 
-from src.synthesizer import _clean_response, format_context
+from src.pipeline.synthesizer import _clean_response, format_context
 
 
 def test_clean_response_strips_think_tags():

@@ -1,6 +1,7 @@
 """Unit tests for graph_builder.py."""
 
-from src.graph_builder import build_graph, query_graph
+from src.graph.builder import build_graph
+from src.graph.querier import query_graph
 
 
 def test_build_graph_creates_machine_nodes(sample_chunks: list[dict]):
