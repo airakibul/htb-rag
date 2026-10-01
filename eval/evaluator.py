@@ -117,11 +117,11 @@ def _api_query(question: str) -> dict[str, Any]:
 def _compute_metrics(
     retrieved_sources: set[str],
     expected_machines: list[str],
-) -> tuple[float, float]:
-    """Return ``(recall, precision)``."""
+) -> tuple[float, float, float]:
+    """Return ``(recall, precision, f1)``."""
     if not expected_machines:
         # No ground truth → cannot evaluate
-        return 0.0, 0.0
+        return 0.0, 0.0, 0.0
 
     expected = {m.lower() for m in expected_machines}
     retrieved = {s.lower() for s in retrieved_sources}
@@ -191,7 +191,7 @@ def main() -> None:
             print(f"⚠️ retrieve failed: {exc}")
             rows.append({
                 "qnum": qnum, "title": title,
-                "recall": 0.0, "precision": 0.0, "sources": [],
+                "recall": 0.0, "precision": 0.0, "f1": 0.0, "sources": [],
             })
             continue
 

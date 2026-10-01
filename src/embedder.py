@@ -1,8 +1,8 @@
 """
 embedder.py – Embedding & vision via Google Gemini, stored in ChromaDB.
 
-Uses ``gemini-embedding-001`` for text embeddings and ``gemini-2.5-flash``
-for image descriptions.  ChromaDB is the persistent vector store.
+Backward-compatible shim delegating to infrastructure adapters (SentenceTransformerEmbeddingService,
+ChromaStore) while maintaining vision and chunk formatting helpers.
 """
 
 from __future__ import annotations
@@ -12,17 +12,13 @@ import io
 import json
 import logging
 import re
-import time
 from pathlib import Path
 from typing import Any
 
 import chromadb
 import google.generativeai as genai
-import numpy as np
 import requests
 from PIL import Image
-
-logger = logging.getLogger(__name__)
 
 from src.config import (
     CHROMA_DIR,
@@ -32,6 +28,19 @@ from src.config import (
     GEMINI_VISION_MODEL,
     IMAGE_CACHE,
 )
+from src.infrastructure.chroma_store import (
+    ChromaStore,
+    FallbackVectorCollection,
+)
+from src.infrastructure.sentence_transformer import (
+    SentenceTransformerEmbeddingService,
+    _get_embed_model,
+    _local_hash_embedding,
+    embed_query,
+    embed_texts,
+)
+
+logger = logging.getLogger(__name__)
 
 # ── Configure Gemini (optional for vision) ─────────────────────────────────
 if GEMINI_API_KEY and GEMINI_API_KEY != "your_gemini_key_here":
@@ -41,178 +50,61 @@ if GEMINI_API_KEY and GEMINI_API_KEY != "your_gemini_key_here":
     except Exception as exc:
         logger.warning(f"Could not configure Gemini: {exc}")
 
-# ── Lazy-loaded SentenceTransformer embedding model ────────────────────────
-_embed_model: Any = None
-
-
-def _get_embed_model() -> Any:
-    """Lazy-load the local SentenceTransformer embedding model."""
-    global _embed_model
-    if _embed_model is None:
-        try:
-            from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
-            logger.info(f"Loading local SentenceTransformer model: {EMBEDDING_MODEL_NAME}...")
-            try:
-                _embed_model = SentenceTransformer(EMBEDDING_MODEL_NAME, local_files_only=True)
-            except Exception:
-                _embed_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-            logger.info(f"✅ Loaded SentenceTransformer model: {EMBEDDING_MODEL_NAME}")
-        except Exception as exc:
-            logger.error(f"❌ Failed to load SentenceTransformer: {exc}")
-            raise
-    return _embed_model
-
-
 # ── Regex / patterns ─────────────────────────────────────────────────────────
 _IMG_URL_RE = re.compile(r"!\[.*?\]\((https?://\S+?)\)")
 _DECORATIVE_PATTERNS = ("cover", "-diff.", "-radar.", "/icons/", "box-")
 
-
-class FallbackVectorCollection:
-    """Fallback vector storage backed by JSON and NumPy when ChromaDB fails."""
-
-    def __init__(self, chroma_dir: str, collection_name: str = "htb_wiki") -> None:
-        self.dir = Path(chroma_dir)
-        self.dir.mkdir(parents=True, exist_ok=True)
-        self.file_path = self.dir / f"{collection_name}_store.json"
-        self._data: dict[str, dict[str, Any]] = self._load()
-
-    def _load(self) -> dict[str, dict[str, Any]]:
-        if self.file_path.exists():
-            try:
-                return json.loads(self.file_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                return {}
-        return {}
-
-    def _save(self) -> None:
-        self.file_path.write_text(json.dumps(self._data), encoding="utf-8")
-
-    def count(self) -> int:
-        return len(self._data)
-
-    def upsert(
-        self,
-        ids: list[str],
-        embeddings: list[list[float]],
-        documents: list[str],
-        metadatas: list[dict[str, Any]],
-    ) -> None:
-        for chunk_id, emb, doc, meta in zip(ids, embeddings, documents, metadatas):
-            self._data[chunk_id] = {
-                "id": chunk_id,
-                "embedding": emb,
-                "document": doc,
-                "metadata": meta,
-            }
-        self._save()
-
-    def get(self, include: list[str] | None = None, limit: int | None = None) -> dict[str, list[Any]]:
-        items = list(self._data.values())
-        if limit:
-            items = items[:limit]
-        docs = [item["document"] for item in items]
-        metas = [item["metadata"] for item in items]
-        return {"documents": docs, "metadatas": metas}
-
-    def query(
-        self,
-        query_embeddings: list[list[float]],
-        n_results: int = 10,
-        where: dict[str, Any] | None = None,
-        include: list[str] | None = None,
-    ) -> dict[str, list[list[Any]]]:
-        if not self._data or not query_embeddings:
-            return {"documents": [[]], "metadatas": [[]], "distances": [[]]}
-
-        q_arr = np.array(query_embeddings[0], dtype=np.float32)
-
-        candidates = []
-        for item in self._data.values():
-            meta = item["metadata"]
-            if where and not self._matches_where(meta, where):
-                continue
-            v_arr = np.array(item["embedding"], dtype=np.float32)
-            target_dim = min(len(q_arr), len(v_arr))
-            q_sub = q_arr[:target_dim]
-            v_sub = v_arr[:target_dim]
-            norm_q = np.linalg.norm(q_sub)
-            norm_v = np.linalg.norm(v_sub)
-            if norm_q == 0 or norm_v == 0:
-                dist = 1.0
-            else:
-                sim = float(np.dot(q_sub, v_sub) / (norm_q * norm_v))
-                dist = max(0.0, 1.0 - sim)
-            candidates.append((dist, item["document"], item["metadata"]))
-
-        candidates.sort(key=lambda x: x[0])
-        top = candidates[:n_results]
-
-        dists = [c[0] for c in top]
-        docs = [c[1] for c in top]
-        metas = [c[2] for c in top]
-
-        return {"documents": [docs], "metadatas": [metas], "distances": [dists]}
-
-    def _matches_where(self, metadata: dict[str, Any], where: dict[str, Any]) -> bool:
-        if not where:
-            return True
-        if "$and" in where:
-            return all(self._matches_where(metadata, clause) for clause in where["$and"])
-        for k, v in where.items():
-            if metadata.get(k) != v:
-                return False
-        return True
+_default_store = ChromaStore()
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  Text Embedding
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _local_hash_embedding(text: str, dim: int = 384) -> list[float]:
-    """Deterministic 384-dim feature hash vectorizer fallback."""
-    tokens = re.findall(r"\w+", text.lower())
-    if not tokens:
-        return [0.0] * dim
-    vec = np.zeros(dim, dtype=np.float32)
-    for token in tokens:
-        h = int(hashlib.md5(token.encode()).hexdigest(), 16)
-        idx = h % dim
-        val = 1.0 if (h & 1) else -1.0
-        vec[idx] += val
-    norm = np.linalg.norm(vec)
-    if norm > 0:
-        vec /= norm
-    return vec.tolist()
+def _get_client() -> Any:
+    """Return a ChromaDB ``PersistentClient`` rooted at ``CHROMA_DIR``."""
+    Path(CHROMA_DIR).mkdir(parents=True, exist_ok=True)
+    return chromadb.PersistentClient(path=CHROMA_DIR)
 
 
-def embed_texts(texts: list[str], max_retries: int = 3) -> list[list[float]]:
-    """Batch-embed multiple texts using local SentenceTransformer with zero rate limits."""
-    if not texts:
-        return []
-    try:
-        model = _get_embed_model()
-        embeddings = model.encode(
-            texts,
-            batch_size=min(len(texts), 128),
-            show_progress_bar=False,
-            normalize_embeddings=True,
-        )
-        return embeddings.tolist()
-    except Exception as exc:
-        logger.warning(f"SentenceTransformer failed ({exc}); falling back to local hash vectorizer.")
-        return [_local_hash_embedding(t, dim=384) for t in texts]
+def get_collection(
+    collection_name: str = "htb_wiki",
+) -> Any:
+    """Return the ChromaDB collection or FallbackVectorCollection on failure."""
+    return _default_store.collection
 
 
-def embed_query(text: str, max_retries: int = 3) -> list[float]:
-    """Embed a single query string using local SentenceTransformer."""
-    try:
-        model = _get_embed_model()
-        embedding = model.encode(text, normalize_embeddings=True)
-        return embedding.tolist()
-    except Exception as exc:
-        logger.warning(f"SentenceTransformer query failed ({exc}); falling back to local hash vectorizer.")
-        return _local_hash_embedding(text, dim=384)
+def _serialize_metadata(chunk: dict[str, Any]) -> dict[str, Any]:
+    """Convert chunk metadata for ChromaDB storage.
+
+    List fields are joined into comma-separated strings because
+    ChromaDB metadata values must be scalars.
+    """
+    meta: dict[str, Any] = {}
+    for key in (
+        "source", "machine_name", "os", "difficulty",
+        "h2", "h3", "breadcrumb", "chunk_type",
+        "has_cve", "has_code", "attack_phase", "stub_file",
+    ):
+        if key in chunk:
+            meta[key] = chunk[key]
+
+    # Lists → comma-separated strings
+    meta["cve_ids"] = ", ".join(chunk.get("cve_ids", [])) or ""
+    meta["tools_mentioned"] = ", ".join(chunk.get("tools_mentioned", [])) or ""
+
+    return meta
+
+
+def _chunk_id(chunk: dict[str, Any]) -> str:
+    """Generate a deterministic, collision-free ID for a chunk.
+
+    Uses full text MD5 hash rather than Python's hash() so IDs are stable across
+    process restarts and never overwrite distinct sub-chunks within the same section.
+    """
+    source = chunk.get("source", "")
+    h2     = chunk.get("h2", "")
+    h3     = chunk.get("h3", "")
+    h4     = chunk.get("h4", "")
+    text   = chunk.get("text", "")
+    sig    = hashlib.md5(text.encode("utf-8")).hexdigest()[:16]
+    return f"{source}__{h2}__{h3}__{h4}__{sig}"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -282,7 +174,6 @@ def describe_image(url: str) -> str | None:
         return None
 
 
-
 def is_decorative_image(url: str) -> bool:
     """Return ``True`` if *url* matches a known decorative-image pattern."""
     low = url.lower()
@@ -292,65 +183,6 @@ def is_decorative_image(url: str) -> bool:
 def get_image_urls(markdown_text: str) -> list[str]:
     """Extract HTTP(S) image URLs from markdown ``![…](url)`` syntax."""
     return _IMG_URL_RE.findall(markdown_text)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  ChromaDB Storage
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _get_client() -> Any:
-    """Return a ChromaDB ``PersistentClient`` rooted at ``CHROMA_DIR``."""
-    Path(CHROMA_DIR).mkdir(parents=True, exist_ok=True)
-    return chromadb.PersistentClient(path=CHROMA_DIR)
-
-
-def get_collection(
-    collection_name: str = "htb_wiki",
-) -> Any:
-    """Return the ChromaDB collection or FallbackVectorCollection on failure."""
-    try:
-        client = _get_client()
-        return client.get_or_create_collection(name=collection_name)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(f"ChromaDB client error ({exc}), using FallbackVectorCollection")
-        return FallbackVectorCollection(CHROMA_DIR, collection_name)
-
-
-def _serialize_metadata(chunk: dict[str, Any]) -> dict[str, Any]:
-    """Convert chunk metadata for ChromaDB storage.
-
-    List fields are joined into comma-separated strings because
-    ChromaDB metadata values must be scalars.
-    """
-    meta: dict[str, Any] = {}
-    for key in (
-        "source", "machine_name", "os", "difficulty",
-        "h2", "h3", "breadcrumb", "chunk_type",
-        "has_cve", "has_code", "attack_phase", "stub_file",
-    ):
-        if key in chunk:
-            meta[key] = chunk[key]
-
-    # Lists → comma-separated strings
-    meta["cve_ids"] = ", ".join(chunk.get("cve_ids", [])) or ""
-    meta["tools_mentioned"] = ", ".join(chunk.get("tools_mentioned", [])) or ""
-
-    return meta
-
-
-def _chunk_id(chunk: dict[str, Any]) -> str:
-    """Generate a deterministic, collision-free ID for a chunk.
-
-    Uses full text MD5 hash rather than Python's hash() so IDs are stable across
-    process restarts and never overwrite distinct sub-chunks within the same section.
-    """
-    source = chunk.get("source", "")
-    h2     = chunk.get("h2", "")
-    h3     = chunk.get("h3", "")
-    h4     = chunk.get("h4", "")
-    text   = chunk.get("text", "")
-    sig    = hashlib.md5(text.encode("utf-8")).hexdigest()[:16]
-    return f"{source}__{h2}__{h3}__{h4}__{sig}"
 
 
 def store_chunks(
@@ -416,22 +248,26 @@ def store_chunks(
             logger.info(f"📦 Stored {stored}/{total} chunks...")
 
 
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  Retrieval helpers
-# ═════════════════════════════════════════════════════════════════════════════
-
 def get_all_documents() -> list[dict[str, Any]]:
-    """Return every document from the ChromaDB collection.
+    """Return every document from the ChromaDB collection."""
+    return _default_store.get_all_documents()
 
-    Each item is ``{"text": …, "metadata": …}``.
-    Used by the retriever to build its BM25 index.
-    """
-    collection = get_collection()
-    results = collection.get(include=["documents", "metadatas"])
 
-    docs: list[dict[str, Any]] = []
-    for text, meta in zip(results["documents"], results["metadatas"]):
-        docs.append({"text": text, "metadata": meta})
-
-    return docs
+__all__ = [
+    "FallbackVectorCollection",
+    "_chunk_id",
+    "_get_client",
+    "_get_embed_model",
+    "_load_image_cache",
+    "_local_hash_embedding",
+    "_save_image_cache",
+    "_serialize_metadata",
+    "describe_image",
+    "embed_query",
+    "embed_texts",
+    "get_all_documents",
+    "get_collection",
+    "get_image_urls",
+    "is_decorative_image",
+    "store_chunks",
+]
