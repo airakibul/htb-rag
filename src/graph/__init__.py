@@ -16,6 +16,8 @@ from src.graph.builder import (
 from src.graph.manifest import (
     generate_machine_manifest,
     generate_manifest_for_query,
+    generate_technique_manifest,
+    get_technique_manifest_for_query,
 )
 from src.graph.querier import (
     get_cves_for_machine,
@@ -35,6 +37,8 @@ __all__ = [
     "build_graph",
     "generate_machine_manifest",
     "generate_manifest_for_query",
+    "generate_technique_manifest",
+    "get_technique_manifest_for_query",
     "get_cves_for_machine",
     "get_machines_for_technique",
     "get_techniques_for_category",

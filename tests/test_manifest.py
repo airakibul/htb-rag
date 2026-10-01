@@ -113,3 +113,14 @@ def test_graph_store_manifest_methods(mock_manifest_graph):
 
     query_manifest = store.get_manifest_for_query("Active Directory attack techniques")
     assert len(query_manifest) == 6
+
+    # Technique-specific manifest tests
+    tech_manifest = store.get_technique_manifest(["Kerberoasting"])
+    assert len(tech_manifest) == 5
+    assert all("Kerberoasting" in m["techniques"] for m in tech_manifest)
+
+    listing_manifest = store.get_technique_manifest_for_query(
+        "How does Kerberoasting work in Active Directory and which machines demonstrate it?"
+    )
+    assert len(listing_manifest) == 5
+

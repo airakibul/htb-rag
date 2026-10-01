@@ -241,3 +241,195 @@ def generate_manifest_for_query(
         }
         for m, data in sorted(combined.items())
     ]
+
+
+def generate_technique_manifest(
+    graph: nx.DiGraph,
+    techniques: list[str],
+    os_filter: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return a compact manifest for all machines demonstrating any of the given techniques.
+
+    Does NOT expand categories, preserving high precision for technique-listing queries.
+    """
+    combined: dict[str, dict[str, Any]] = {}
+    for tech in techniques:
+        # Check high-precision tool node alternatives
+        if "sqlmap" in tech.lower() and "sqlmap" in graph:
+            for p in graph.predecessors("sqlmap"):
+                if graph.nodes[p].get("type") == "machine":
+                    diff = str(graph.nodes[p].get("difficulty", "unknown") or "unknown")
+                    os_val = "unknown"
+                    for s in graph.successors(p):
+                        if graph.edges[p, s].get("rel") == "os":
+                            os_val = s
+                            break
+                    if os_val == "unknown":
+                        os_val = str(graph.nodes[p].get("os", "unknown") or "unknown")
+                    if os_filter and os_val not in (os_filter, "unknown"):
+                        continue
+                    if p not in combined:
+                        combined[p] = {
+                            "machine": p,
+                            "os": os_val,
+                            "difficulty": diff,
+                            "techniques": {tech},
+                        }
+                    else:
+                        combined[p]["techniques"].add(tech)
+            continue
+
+        if ("evil-winrm" in tech.lower() or "winrm" in tech.lower()) and ("evil-winrm" in graph or "winrm" in graph):
+            for t in ["evil-winrm", "winrm"]:
+                if t in graph:
+                    for p in graph.predecessors(t):
+                        if graph.nodes[p].get("type") == "machine":
+                            diff = str(graph.nodes[p].get("difficulty", "unknown") or "unknown")
+                            os_val = "unknown"
+                            for s in graph.successors(p):
+                                if graph.edges[p, s].get("rel") == "os":
+                                    os_val = s
+                                    break
+                            if os_val == "unknown":
+                                os_val = str(graph.nodes[p].get("os", "unknown") or "unknown")
+                            if os_filter and os_val not in (os_filter, "unknown"):
+                                continue
+                            if p not in combined:
+                                combined[p] = {
+                                    "machine": p,
+                                    "os": os_val,
+                                    "difficulty": diff,
+                                    "techniques": {tech},
+                                }
+                            else:
+                                combined[p]["techniques"].add(tech)
+            continue
+
+        for entry in generate_machine_manifest(graph, tech):
+            m = entry["machine"]
+            if os_filter and entry.get("os") not in (os_filter, "unknown"):
+                continue
+            if m not in combined:
+                combined[m] = {
+                    "machine": m,
+                    "os": entry["os"],
+                    "difficulty": entry["difficulty"],
+                    "techniques": set(entry["techniques"]),
+                }
+            else:
+                combined[m]["techniques"].update(entry["techniques"])
+
+    return [
+        {
+            "machine": m,
+            "os": data["os"],
+            "difficulty": data["difficulty"],
+            "techniques": sorted(data["techniques"]),
+        }
+        for m, data in sorted(combined.items())
+    ]
+
+
+GENERIC_CATEGORY_TECHNIQUES: set[str] = {
+    "Active Directory Exploitation",
+    "Windows Privilege Escalation",
+    "Linux Privilege Escalation",
+    "Password Cracking & Hash Dumping",
+}
+
+
+def get_technique_manifest_for_query(
+    graph: nx.DiGraph,
+    query: str,
+    os_filter: str | None = None,
+) -> list[dict[str, Any]]:
+    """Extract targeted techniques or tools for listing queries and generate a tight manifest.
+
+    Prevents category-level over-expansion by matching directly to canonical techniques or
+    specific tool nodes.
+    """
+    low = query.lower()
+
+    # 1. High-precision tool nodes (sqlmap, evil-winrm)
+    if "sqlmap" in low and "sqlmap" in graph:
+        tool_machs = []
+        for p in graph.predecessors("sqlmap"):
+            if graph.nodes[p].get("type") == "machine":
+                diff = str(graph.nodes[p].get("difficulty", "unknown") or "unknown")
+                os_val = "unknown"
+                for s in graph.successors(p):
+                    if graph.edges[p, s].get("rel") == "os":
+                        os_val = s
+                        break
+                if os_val == "unknown":
+                    os_val = str(graph.nodes[p].get("os", "unknown") or "unknown")
+                if os_filter and os_val not in (os_filter, "unknown"):
+                    continue
+                tool_machs.append({
+                    "machine": p,
+                    "os": os_val,
+                    "difficulty": diff,
+                    "techniques": ["SQL Injection with sqlmap"],
+                })
+        return sorted(tool_machs, key=lambda x: x["machine"])
+
+    if ("evil-winrm" in low or "winrm" in low) and ("evil-winrm" in graph or "winrm" in graph):
+        tool_machs_map: dict[str, dict[str, Any]] = {}
+        for t in ["evil-winrm", "winrm"]:
+            if t in graph:
+                for p in graph.predecessors(t):
+                    if graph.nodes[p].get("type") == "machine":
+                        diff = str(graph.nodes[p].get("difficulty", "unknown") or "unknown")
+                        os_val = "unknown"
+                        for s in graph.successors(p):
+                            if graph.edges[p, s].get("rel") == "os":
+                                os_val = s
+                                break
+                        if os_val == "unknown":
+                            os_val = str(graph.nodes[p].get("os", "unknown") or "unknown")
+                        if os_filter and os_val not in (os_filter, "unknown"):
+                            continue
+                        if p not in tool_machs_map:
+                            tool_machs_map[p] = {
+                                "machine": p,
+                                "os": os_val,
+                                "difficulty": diff,
+                                "techniques": {"WinRM Shell Access"},
+                            }
+                        else:
+                            tool_machs_map[p]["techniques"].add("WinRM Shell Access")
+        return [
+            {
+                "machine": m,
+                "os": d["os"],
+                "difficulty": d["difficulty"],
+                "techniques": sorted(d["techniques"]),
+            }
+            for m, d in sorted(tool_machs_map.items())
+        ]
+
+    # 2. Match canonical techniques
+    from src.graph.builder import CANONICAL_TECHNIQUES
+
+    matched: list[str] = []
+    for tech, info in CANONICAL_TECHNIQUES.items():
+        patterns = info.get("patterns", [])
+        fb_pats = info.get("fallback_patterns", [])
+        fb_req = info.get("fallback_require", [])
+
+        hit = False
+        for p in patterns:
+            if p in low:
+                hit = True
+                break
+        if not hit and fb_pats and fb_req:
+            if any(p in low for p in fb_pats) and any(r in low for r in fb_req):
+                hit = True
+        if hit and tech in graph:
+            matched.append(tech)
+
+    specific_matched = [t for t in matched if t not in GENERIC_CATEGORY_TECHNIQUES]
+    chosen = specific_matched if specific_matched else matched
+
+    return generate_technique_manifest(graph, chosen, os_filter=os_filter)
+

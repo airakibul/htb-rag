@@ -17,6 +17,8 @@ from src.graph.builder import load_graph
 from src.graph.manifest import (
     generate_machine_manifest,
     generate_manifest_for_query,
+    generate_technique_manifest,
+    get_technique_manifest_for_query,
 )
 from src.graph.querier import (
     get_cves_for_machine,
@@ -87,6 +89,23 @@ class NetworkXGraphStore(GraphStore):
         # Deduplicate by machine name
         # Sort alphabetically
         return generate_manifest_for_query(self.graph, query, hits=hits, os_filter=os_filter)
+
+    def get_technique_manifest(
+        self,
+        techniques: list[str],
+        os_filter: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return a compact manifest for directly matched techniques, avoiding category expansion."""
+        return generate_technique_manifest(self.graph, techniques, os_filter=os_filter)
+
+    def get_technique_manifest_for_query(
+        self,
+        query: str,
+        os_filter: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return a compact manifest for directly targeted techniques or tools, avoiding broad category expansion."""
+        return get_technique_manifest_for_query(self.graph, query, os_filter=os_filter)
+
 
     # Convenience delegators for graph navigation
     def get_tools_for_machine(self, machine: str) -> list[str]:

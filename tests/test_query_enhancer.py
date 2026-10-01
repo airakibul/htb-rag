@@ -40,3 +40,12 @@ def test_enhance_expands_cve(monkeypatch):
 def test_enhance_specific_scope():
     res = enhance_query("How does DCSync work")
     assert res.query_scope == "specific"
+
+
+def test_enhance_technique_listing_scope():
+    res = enhance_query("How does Kerberoasting work in Active Directory environments and which HTB machines demonstrate it?")
+    assert res.query_scope == "technique_listing"
+
+    res_sqlmap = enhance_query("Which HTB machines demonstrate SQL injection exploited using sqlmap, and for what purpose?")
+    assert res_sqlmap.query_scope == "technique_listing"
+

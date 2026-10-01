@@ -266,11 +266,14 @@ class HybridRetriever:
 
         # ── Scope-based Top-K and Candidate Pool ────────────────────────────
         scope = intent.get("scope", "specific")
-        is_broad = (scope == "broad")
+        is_broad = (scope in ("broad", "technique_listing"))
 
-        if is_broad:
+        if scope == "broad":
             effective_top_k = max(top_k, 25)
             candidate_pool = 100
+        elif scope == "technique_listing":
+            effective_top_k = min(top_k, 10) if top_k else 8
+            candidate_pool = 40
         else:
             effective_top_k = min(top_k, 8) if top_k else 6
             candidate_pool = 35
@@ -385,12 +388,28 @@ class HybridRetriever:
                 top_score = final_chunks[0].get("rrf_score", 0.0)
                 final_chunks = [c for c in final_chunks if c.get("rrf_score", 0.0) >= top_score * 0.50]
 
-        # ── Graph-Assisted Manifest Injection (Week 2) ──────────────────
+        # ── Graph-Assisted Manifest Injection ──────────────────
         manifest = None
         if is_broad:
-            manifest = self.graph_store.get_manifest_for_query(query, os_filter=os_val)
+            # For technique-listing queries: use ONLY direct technique matches
+            direct_techs = graph_hits.get("matched_techniques", [])
+            matched_cats = graph_hits.get("matched_categories", [])
+
+            # If query has specific technique keywords, prefer technique-level manifest
+            if direct_techs and len(matched_cats) <= 2 and scope == "technique_listing":
+                # Build technique-focused manifest (not category-level)
+                manifest = self.graph_store.get_technique_manifest(
+                    techniques=direct_techs[:5], os_filter=os_val
+                )
+            elif scope == "technique_listing":
+                manifest = self.graph_store.get_technique_manifest_for_query(query, os_filter=os_val)
+            else:
+                manifest = self.graph_store.get_manifest_for_query(query, os_filter=os_val)
+
             if manifest:
-                logger.info(f"📋 Manifest injection: {len(manifest)} machines for broad query")
+                logger.info(f"📋 Manifest injection: {len(manifest)} machines for query")
+
+
         return RetrievalResult(
             chunks=final_chunks[:effective_top_k],
             graph_hits=graph_hits,

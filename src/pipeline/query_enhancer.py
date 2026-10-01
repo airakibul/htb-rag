@@ -24,18 +24,31 @@ def _fallback_enhance(query: str, graph: nx.DiGraph | None = None) -> EnhancedQu
     """Robust offline intent extraction and graph-based expansion."""
     low = query.lower()
 
-    # Scope detection (broad cheatsheets vs specific CVE/tool/technique questions)
+    # Scope detection (broad cheatsheets vs technique listings vs specific CVE/tool/technique questions)
     broad_indicators = ["cheatsheet", "common", "across", "all machines", "overview", "list"]
-    has_specific_indicator = bool(re.search(r"cve-\d{4}-\d+", low)) or any(
+    has_specific_indicator = any(
         term in low for term in [
             "kerberoast", "eternalblue", "sqlmap", "docker", "juicypotato",
             "dcsync", "suid", "gtfobins", "evil-winrm", "sambacry", "samba",
         ]
     )
-    if has_specific_indicator:
+    has_cve = bool(re.search(r"cve-\d{4}-\d+", low))
+    listing_indicators = [
+        "which machines", "which htb", "demonstrate", "across htb",
+        "across machines", "and which", "how is", "how are", "how was",
+    ]
+    has_listing_intent = any(w in low for w in listing_indicators)
+
+    if has_cve:
         query_scope = "specific"
+    elif has_specific_indicator and has_listing_intent:
+        query_scope = "technique_listing"
+    elif has_specific_indicator:
+        query_scope = "specific"
+    elif any(w in low for w in broad_indicators) or has_listing_intent:
+        query_scope = "broad"
     else:
-        query_scope = "broad" if any(w in low for w in broad_indicators) else "specific"
+        query_scope = "specific"
 
     # Phase detection
     target_phase = None

@@ -76,6 +76,24 @@ class GraphStore(ABC):
         """Use query_graph() to identify matched categories/techniques, then build a combined manifest."""
         ...
 
+    @abstractmethod
+    def get_technique_manifest(
+        self,
+        techniques: list[str],
+        os_filter: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return a compact manifest for only directly matched techniques, without category expansion."""
+        ...
+
+    @abstractmethod
+    def get_technique_manifest_for_query(
+        self,
+        query: str,
+        os_filter: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return a compact manifest for directly targeted techniques or tools, avoiding broad category expansion."""
+        ...
+
 
 class EmbeddingService(ABC):
     """Abstract interface for generating text embeddings."""

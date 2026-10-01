@@ -48,6 +48,9 @@ def test_concrete_implementations_satisfy_contracts():
     assert hasattr(NetworkXGraphStore, "get_all_techniques")
     assert hasattr(NetworkXGraphStore, "get_machine_manifest")
     assert hasattr(NetworkXGraphStore, "get_manifest_for_query")
+    assert hasattr(NetworkXGraphStore, "get_technique_manifest")
+    assert hasattr(NetworkXGraphStore, "get_technique_manifest_for_query")
+
 
     # EmbeddingService
     assert issubclass(SentenceTransformerEmbeddingService, EmbeddingService)

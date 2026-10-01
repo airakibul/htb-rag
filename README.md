@@ -8,18 +8,64 @@ An offensive security Retrieval-Augmented Generation (RAG) assistant built over 
 
 ```
 raw/*.md ──► AST & Heading Chunker ──► SentenceTransformer Embedding ──► ChromaDB (Vector Store)
-                                 └──► Knowledge Graph  ──► NetworkX (Graph Store)
+                                 └──► Knowledge Graph Builder     ──► NetworkX (Graph Store)
 
 User Query ──► HybridRetriever
-                 ├── BM25 (Lexical matching for tools, CVEs, exact flags)
-                 ├── ChromaDB (Dense semantic retrieval via SentenceTransformer embeddings)
-                 └── NetworkX (Cross-machine attack graph traversal)
-               └──► Reciprocal Rank Fusion (RRF)
-               └──► Cross-Encoder Reranker (ms-marco-MiniLM-L-6-v2)
-               └──► Source Diversification (anti-monopoly filtering)
-               └──► Synthesizer (Groq qwen/qwen3.8-27b with fallback chain)
+                 ├── BM25 (Lexical)
+                 ├── ChromaDB (Semantic)
+                 └── NetworkX (Graph)
+               └──► RRF + Cross-Encoder Reranking
+               └──► Source Diversification
+               └──► Graph-Assisted Manifest Injection (broad queries)
+               └──► Dual-Layer Synthesizer (chunks + manifest → LLM)
                └──► FastAPI REST API (`/query`, `/retrieve`)
 ```
+
+### Layered Modular Layout
+
+```
+src/
+├── domain/            # Core business models & abstract interfaces (No I/O dependencies)
+│   ├── interfaces.py  # Abstract contracts (VectorStore, GraphStore, LLMProvider, etc.)
+│   └── models.py      # Pure data transfer objects (Chunk, RetrievalResult, EnhancedQuery, etc.)
+├── infrastructure/    # Concrete adapters for external systems, DBs, and LLMs
+│   ├── chroma_store.py          # VectorStore adapter (ChromaDB + fallback)
+│   ├── networkx_graph.py        # GraphStore adapter (NetworkX)
+│   ├── sentence_transformer.py  # EmbeddingService adapter
+│   ├── cross_encoder.py         # Reranker adapter (ms-marco-MiniLM-L-6-v2)
+│   ├── groq_provider.py         # LLMProvider adapter (Groq Qwen 2.5)
+│   └── gemini_provider.py       # LLMProvider adapter (Google Gemini)
+├── pipeline/          # Orchestration pipeline (depends only on domain interfaces)
+│   ├── chunker.py         # AST & heading-aware document chunker
+│   ├── query_enhancer.py  # Query intent detection and scope expansion
+│   ├── retriever.py       # Multi-stage hybrid retriever + manifest injection
+│   └── synthesizer.py     # Dual-layer synthesizer with prompt citations
+├── graph/             # Knowledge graph domain logic & manifest extraction
+│   ├── builder.py     # Graph construction from writeup corpus
+│   ├── querier.py     # Relational graph topology and queries
+│   └── manifest.py    # Graph-assisted machine manifest generation
+└── api/               # Presentation layer (HTTP REST endpoints)
+    ├── server.py      # FastAPI application initialization & middleware
+    ├── routes.py      # REST endpoint routes (/query, /retrieve, /machines, etc.)
+    └── schemas.py     # Pydantic request/response schemas
+```
+
+---
+
+## SOLID Architecture Design
+
+The pipeline follows strict SOLID object-oriented design principles:
+
+1. **Single Responsibility Principle (SRP):**
+   - Each module handles a single, well-defined responsibility: `src.graph.manifest` generates machine manifests, `src.pipeline.query_enhancer` handles scope and intent classification, and `src.infrastructure.cross_encoder` performs neural reranking.
+2. **Open/Closed Principle (OCP):**
+   - The architecture is open for extension but closed for modification. New vector stores (e.g., Qdrant), graph engines (e.g., Neo4j), or LLMs (e.g., Anthropic, Ollama) can be plugged in by implementing domain interfaces without altering pipeline logic.
+3. **Liskov Substitution Principle (LSP):**
+   - Concrete implementations substitute domain abstractions seamlessly. `GroqProvider` and `GeminiProvider` both adhere strictly to `LLMProvider`, allowing transparent fallback without caller side-effects.
+4. **Interface Segregation Principle (ISP):**
+   - Rather than monolithic interfaces, contracts in [`src/domain/interfaces.py`](src/domain/interfaces.py) are fine-grained and purpose-specific: `VectorStore`, `GraphStore`, `EmbeddingService`, `LLMProvider`, `Reranker`, and `ChunkingStrategy`.
+5. **Dependency Inversion Principle (DIP):**
+   - High-level orchestration layers (`HybridRetriever`, `Synthesizer`, `routes.py`) depend strictly upon abstract interfaces defined in the domain layer, not on concrete database drivers or vendor SDKs. Dependencies are injected via constructors.
 
 ---
 
