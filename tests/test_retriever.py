@@ -47,3 +47,57 @@ def test_reciprocal_rank_fusion_merges():
     assert merged[0]["rank"] == 1
     assert merged[1]["rank"] == 2
     assert merged[2]["rank"] == 3
+
+
+def test_retrieve_manifest_injection_broad():
+    from unittest.mock import MagicMock
+    from src.domain.models import RetrievalResult
+
+    retriever = HybridRetriever.__new__(HybridRetriever)
+    retriever.vector_store = MagicMock()
+    retriever.graph_store = MagicMock()
+    retriever.embedding_service = MagicMock()
+    retriever.reranker = MagicMock()
+    retriever.graph = None
+    retriever.docs = []
+    retriever.bm25 = None
+    retriever.bm25_search = MagicMock(return_value=[])
+    retriever.vector_search = MagicMock(return_value=[])
+    retriever.reciprocal_rank_fusion = MagicMock(return_value=[])
+    retriever.reranker.rerank = MagicMock(return_value=[])
+
+    retriever.graph_store.query_graph.return_value = {"relevant_machines": []}
+    sample_manifest = [{"machine": "htb-active", "os": "windows", "difficulty": "easy", "techniques": ["Kerberoasting"]}]
+    retriever.graph_store.get_manifest_for_query.return_value = sample_manifest
+
+    result = retriever.retrieve("Linux privilege escalation cheatsheet")
+    assert isinstance(result, RetrievalResult)
+    assert result.manifest == sample_manifest
+    # Test dictionary-like compatibility
+    assert result["manifest"] == sample_manifest
+    assert result.get("graph") == {"relevant_machines": []}
+
+
+def test_retrieve_manifest_none_for_specific():
+    from unittest.mock import MagicMock
+    from src.domain.models import RetrievalResult
+
+    retriever = HybridRetriever.__new__(HybridRetriever)
+    retriever.vector_store = MagicMock()
+    retriever.graph_store = MagicMock()
+    retriever.embedding_service = MagicMock()
+    retriever.reranker = MagicMock()
+    retriever.graph = None
+    retriever.docs = []
+    retriever.bm25 = None
+    retriever.bm25_search = MagicMock(return_value=[])
+    retriever.vector_search = MagicMock(return_value=[])
+    retriever.reciprocal_rank_fusion = MagicMock(return_value=[])
+    retriever.reranker.rerank = MagicMock(return_value=[])
+
+    retriever.graph_store.query_graph.return_value = {"relevant_machines": []}
+
+    result = retriever.retrieve("htb-active Kerberoasting port 88")
+    assert isinstance(result, RetrievalResult)
+    assert result.manifest is None
+

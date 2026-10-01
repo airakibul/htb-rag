@@ -12,6 +12,7 @@ import re
 from typing import Any
 
 from src.domain.interfaces import LLMProvider
+from src.domain.models import RetrievalResult
 from src.infrastructure.gemini_provider import GeminiProvider
 from src.infrastructure.groq_provider import GroqProvider, clean_response
 from src.infrastructure.openrouter_provider import OpenRouterProvider
@@ -36,10 +37,16 @@ Rules:
    Format: (seen on: MachineA, MachineB)
 3. For cheatsheet questions, group by attack phase:
    Recon → Foothold → Lateral Movement → Privilege Escalation
-4. If context lacks sufficient info, say:
+4. For broad cheatsheet queries, if a "Complete Machine Manifest" table is provided:
+   - Generate detailed exploit steps from the chunk excerpts (cite machines).
+   - After the detailed section, add a "## Also Demonstrated On" section that lists
+     ALL machines from the manifest not already cited in detail, grouped by technique.
+   - Format: "Also demonstrated on: MachineA, MachineB, MachineC (technique-name)"
+   - This ensures comprehensive corpus coverage in the final answer.
+5. If context lacks sufficient info, say:
    "Insufficient data in the retrieved writeups."
-5. Never invent CVE numbers, tool flags, usernames, or machine names.
-6. Use bullet points for cheatsheet answers with explicit tool commands in code blocks or inline backticks. Be concise but complete.
+6. Never invent CVE numbers, tool flags, usernames, or machine names.
+7. Use bullet points for cheatsheet answers with explicit tool commands in code blocks or inline backticks. Be concise but complete.
 """
 
 # ── Context size budget ──────────────────────────────────────────────────────
@@ -51,12 +58,13 @@ _MAX_CHUNK_CHARS   = 1500
 #  Context formatting
 # ═════════════════════════════════════════════════════════════════════════════
 
-def format_context(retrieval_result: dict[str, Any]) -> str:
+def format_context(retrieval_result: dict[str, Any] | RetrievalResult) -> str:
     """Build a context string from retrieval results.
 
     * Prepends verified graph findings (technique → machines mapping) when available.
     * Appends each chunk truncated to ~1200 chars.
-    * Total output capped at ~16 000 chars.
+    * Appends complete machine manifest table when available.
+    * Total output capped at context budget.
     """
     parts: list[str] = []
     used = 0
@@ -104,6 +112,27 @@ def format_context(retrieval_result: dict[str, Any]) -> str:
         parts.append(block)
         used += len(block)
 
+    # ── Manifest Table Injection ─────────────────────────────────────
+    manifest = (
+        retrieval_result.manifest
+        if isinstance(retrieval_result, RetrievalResult)
+        else retrieval_result.get("manifest")
+    )
+    if manifest:
+        manifest_lines = ["=== Complete Machine Manifest (Graph-Verified) ==="]
+        manifest_lines.append("| Machine | OS | Techniques |")
+        manifest_lines.append("|---------|-----|-----------|")
+        for entry in manifest[:200]:  # Cap at 200 to prevent overflow
+            techs = ", ".join(entry.get("techniques", [])[:3])
+            manifest_lines.append(f"| {entry['machine']} | {entry.get('os', '?')} | {techs} |")
+        manifest_lines.append("===\n")
+        manifest_block = "\n".join(manifest_lines)
+
+        # Only include if within context budget
+        if used + len(manifest_block) < _MAX_CONTEXT_CHARS + 4000:  # Allow extra budget for manifest
+            parts.append(manifest_block)
+            used += len(manifest_block)
+
     return "\n".join(parts)
 
 
@@ -137,7 +166,7 @@ class Synthesizer:
     def synthesize(
         self,
         query: str,
-        retrieval_result: dict[str, Any],
+        retrieval_result: dict[str, Any] | RetrievalResult,
     ) -> dict[str, Any]:
         """Generate a cited answer from retrieved context using the provider chain."""
         context = format_context(retrieval_result)
@@ -194,7 +223,7 @@ class Synthesizer:
 # Module-level convenience function
 def synthesize(
     query: str,
-    retrieval_result: dict[str, Any],
+    retrieval_result: dict[str, Any] | RetrievalResult,
     providers: list[LLMProvider] | None = None,
 ) -> dict[str, Any]:
     """Generate a cited answer from retrieved context via LLMProvider fallback chain."""

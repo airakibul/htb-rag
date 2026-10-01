@@ -63,7 +63,7 @@ async def query(req: QueryRequest):
     retriever: HybridRetriever = _get_retriever()
 
     t0 = time.time()
-    retrieval = await asyncio.to_thread(
+    retrieval: Any = await asyncio.to_thread(
         retriever.retrieve,
         query=req.question,
         top_k=req.top_k,
@@ -73,7 +73,7 @@ async def query(req: QueryRequest):
     t_ret = time.time() - t0
 
     t1 = time.time()
-    result = await asyncio.to_thread(synthesize, req.question, retrieval)
+    result: Any = await asyncio.to_thread(synthesize, req.question, retrieval)
     t_syn = time.time() - t1
 
     total_latency = round(time.time() - t_start, 2)

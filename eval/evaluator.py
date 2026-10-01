@@ -195,13 +195,22 @@ def main() -> None:
             })
             continue
 
-        # Collect unique sources from retrieved chunks
-        chunks  = retrieval.get("chunks", [])
-        sources = sorted({
+        # When computing recall, combine chunk sources AND manifest machines:
+        result = retrieval
+        chunk_sources = {
             c.get("metadata", {}).get("source", "")
-            for c in chunks
+            for c in result.get("chunks", [])
             if c.get("metadata", {}).get("source")
-        })
+        }
+        manifest_sources = set()
+        if result.get("manifest"):
+            manifest_sources = {
+                m["machine"].lower() if m["machine"].lower().startswith("htb-") else f"htb-{m['machine'].lower()}"
+                for m in result["manifest"]
+                if isinstance(m, dict) and m.get("machine")
+            }
+        all_found_sources = chunk_sources | manifest_sources
+        sources = sorted(all_found_sources)
 
         recall, precision, f1 = _compute_metrics(set(sources), expected_machines)
 

@@ -81,16 +81,18 @@ class GroqProvider(LLMProvider):
         try:
             from groq import Groq
 
-            client: Any = Groq(api_key=self.api_key, timeout=self.timeout)
+            client: Any = Groq(api_key=self.api_key, timeout=self.timeout, max_retries=0)
             logger.info(f"Synthesizing answer via Groq ({self.model})...")
             messages: Any = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ]
+            # Clamp max_tokens to 800 to avoid Groq OTPM (output tokens per minute) 1000 limit
+            effective_tokens = min(max_tokens, 800)
             response: Any = client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                max_tokens=max_tokens,
+                max_tokens=effective_tokens,
                 temperature=temperature,
             )
             content = response.choices[0].message.content

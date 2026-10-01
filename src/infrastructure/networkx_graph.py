@@ -9,12 +9,15 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import networkx as nx
+import networkx as nx  # type: ignore
 
 from src.config import GRAPH_PATH
 from src.domain.interfaces import GraphStore
 from src.graph.builder import load_graph
-from src.graph.manifest import generate_machine_manifest
+from src.graph.manifest import (
+    generate_machine_manifest,
+    generate_manifest_for_query,
+)
 from src.graph.querier import (
     get_cves_for_machine,
     get_machines_for_technique,
@@ -59,9 +62,31 @@ class NetworkXGraphStore(GraphStore):
             if d.get("type") == "technique"
         )
 
-    def get_machine_manifest(self, technique: str) -> list[dict[str, Any]]:
-        """Return a compact manifest table for all machines demonstrating a technique."""
-        return generate_machine_manifest(self.graph, technique)
+    def get_machine_manifest(self, technique_or_category: str) -> list[dict[str, Any]]:
+        """Return a compact manifest for all machines demonstrating a technique/category.
+
+        Each entry: {"machine": str, "os": str, "difficulty": str, "techniques": list[str]}
+        """
+        # 1. Find the node in the graph matching technique_or_category
+        # 2. If it's a category node, find all technique nodes belonging to it
+        # 3. For each technique, find all machine nodes connected via 'demonstrates' edges
+        # 4. For each machine, extract OS (from 'os' edge successor) and difficulty (from node attrs)
+        # 5. Build and return the manifest list, sorted by machine name
+        # 6. Deduplicate machines that appear under multiple techniques
+        return generate_machine_manifest(self.graph, technique_or_category)
+
+    def get_manifest_for_query(
+        self,
+        query: str,
+        os_filter: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Use query_graph() to identify matched categories/techniques, 
+        then build a combined manifest for all matches."""
+        hits = self.query_graph(query)
+        # Combine manifests from all matched categories and techniques
+        # Deduplicate by machine name
+        # Sort alphabetically
+        return generate_manifest_for_query(self.graph, query, hits=hits, os_filter=os_filter)
 
     # Convenience delegators for graph navigation
     def get_tools_for_machine(self, machine: str) -> list[str]:

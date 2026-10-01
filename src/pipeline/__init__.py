@@ -14,6 +14,7 @@ from src.pipeline.query_enhancer import (
 from src.pipeline.retriever import (
     STOPWORDS,
     HybridRetriever,
+    RetrievalResult,
 )
 from src.pipeline.synthesizer import (
     SYSTEM_PROMPT,
@@ -26,6 +27,7 @@ __all__ = [
     "EnhancedQuery",
     "HybridRetriever",
     "MarkdownChunker",
+    "RetrievalResult",
     "STOPWORDS",
     "SYSTEM_PROMPT",
     "Synthesizer",

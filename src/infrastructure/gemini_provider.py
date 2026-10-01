@@ -22,7 +22,7 @@ class GeminiProvider(LLMProvider):
     def __init__(
         self,
         api_key: str | None = None,
-        model_name: str = "models/gemini-3.8-flash",
+        model_name: str = "gemini-flash-latest",
     ) -> None:
         self.api_key = api_key or GEMINI_API_KEY
         self.model_name = model_name

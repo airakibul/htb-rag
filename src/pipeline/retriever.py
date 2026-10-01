@@ -21,6 +21,7 @@ from src.domain.interfaces import (
     Reranker,
     VectorStore,
 )
+from src.domain.models import RetrievalResult
 from src.infrastructure.chroma_store import ChromaStore
 from src.infrastructure.cross_encoder import CrossEncoderReranker
 from src.infrastructure.networkx_graph import NetworkXGraphStore
@@ -240,7 +241,7 @@ class HybridRetriever:
         top_k: int = TOP_K,
         os_filter: str | None = None,
         difficulty_filter: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> RetrievalResult:
         """Run the full hybrid retrieval pipeline.
 
         Returns::
@@ -384,9 +385,16 @@ class HybridRetriever:
                 top_score = final_chunks[0].get("rrf_score", 0.0)
                 final_chunks = [c for c in final_chunks if c.get("rrf_score", 0.0) >= top_score * 0.50]
 
-        return {
-            "chunks":          final_chunks[:effective_top_k],
-            "graph":           graph_hits,
-            "query":           query,
-            "filters_applied": {"os": os_val, "difficulty": diff_val},
-        }
+        # ── Graph-Assisted Manifest Injection (Week 2) ──────────────────
+        manifest = None
+        if is_broad:
+            manifest = self.graph_store.get_manifest_for_query(query, os_filter=os_val)
+            if manifest:
+                logger.info(f"📋 Manifest injection: {len(manifest)} machines for broad query")
+        return RetrievalResult(
+            chunks=final_chunks[:effective_top_k],
+            graph_hits=graph_hits,
+            query=query,
+            filters_applied={"os": os_val, "difficulty": diff_val},
+            manifest=manifest,  # NEW
+        )

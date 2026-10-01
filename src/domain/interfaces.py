@@ -63,8 +63,17 @@ class GraphStore(ABC):
         ...
 
     @abstractmethod
-    def get_machine_manifest(self, technique: str) -> list[dict[str, Any]]:
-        """NEW: Return a compact manifest table for all machines demonstrating a technique."""
+    def get_machine_manifest(self, technique_or_category: str) -> list[dict[str, Any]]:
+        """Return a compact manifest for all machines demonstrating a technique/category."""
+        ...
+
+    @abstractmethod
+    def get_manifest_for_query(
+        self,
+        query: str,
+        os_filter: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Use query_graph() to identify matched categories/techniques, then build a combined manifest."""
         ...
 
 

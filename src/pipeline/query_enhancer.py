@@ -24,9 +24,18 @@ def _fallback_enhance(query: str, graph: nx.DiGraph | None = None) -> EnhancedQu
     """Robust offline intent extraction and graph-based expansion."""
     low = query.lower()
 
-    # Scope detection
-    broad_indicators = ["cheatsheet", "common", "across", "all machines", "overview", "list", "where"]
-    query_scope = "broad" if any(w in low for w in broad_indicators) else "specific"
+    # Scope detection (broad cheatsheets vs specific CVE/tool/technique questions)
+    broad_indicators = ["cheatsheet", "common", "across", "all machines", "overview", "list"]
+    has_specific_indicator = bool(re.search(r"cve-\d{4}-\d+", low)) or any(
+        term in low for term in [
+            "kerberoast", "eternalblue", "sqlmap", "docker", "juicypotato",
+            "dcsync", "suid", "gtfobins", "evil-winrm", "sambacry", "samba",
+        ]
+    )
+    if has_specific_indicator:
+        query_scope = "specific"
+    else:
+        query_scope = "broad" if any(w in low for w in broad_indicators) else "specific"
 
     # Phase detection
     target_phase = None

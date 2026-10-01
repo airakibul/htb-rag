@@ -17,7 +17,10 @@ from src.graph.builder import (  # noqa: F401
     main,
     save_graph,
 )
-from src.graph.manifest import generate_machine_manifest  # noqa: F401
+from src.graph.manifest import (  # noqa: F401
+    generate_machine_manifest,
+    generate_manifest_for_query,
+)
 from src.graph.querier import (  # noqa: F401
     get_cves_for_machine,
     get_machines_for_technique,

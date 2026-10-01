@@ -24,11 +24,45 @@ class Chunk:
 @dataclass
 class RetrievalResult:
     """Complete output from the retrieval pipeline."""
-    chunks: list[Chunk]
+    chunks: list[dict[str, Any]] | list[Chunk]
     graph_hits: dict[str, Any] = field(default_factory=dict)
     query: str = ""
     filters_applied: dict[str, Any] = field(default_factory=dict)
     manifest: list[dict[str, Any]] | None = None  # NEW: for Week 2
+
+    def __getitem__(self, key: str) -> Any:
+        if key == "graph":
+            return self.graph_hits
+        if hasattr(self, key):
+            return getattr(self, key)
+        raise KeyError(key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        if key == "graph":
+            return self.graph_hits
+        if hasattr(self, key):
+            val = getattr(self, key)
+            return val if val is not None else default
+        return default
+
+    def __contains__(self, key: str) -> bool:
+        return key in ("chunks", "graph_hits", "graph", "query", "filters_applied", "manifest")
+
+    def keys(self) -> list[str]:
+        return ["chunks", "graph", "graph_hits", "query", "filters_applied", "manifest"]
+
+    def items(self) -> list[tuple[str, Any]]:
+        return [(k, self.get(k)) for k in self.keys()]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "chunks": self.chunks,
+            "graph": self.graph_hits,
+            "graph_hits": self.graph_hits,
+            "query": self.query,
+            "filters_applied": self.filters_applied,
+            "manifest": self.manifest,
+        }
 
 
 @dataclass

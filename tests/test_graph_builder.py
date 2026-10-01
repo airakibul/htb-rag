@@ -53,3 +53,46 @@ def test_query_graph_returns_technique_machines(sample_chunks: list[dict]):
     result = query_graph(graph, "SUID privilege escalation")
     assert "technique_machines" in result
     assert isinstance(result["technique_machines"], dict)
+
+
+def test_get_machine_manifest_technique(sample_chunks: list[dict]):
+    import networkx as nx
+    from src.infrastructure.networkx_graph import NetworkXGraphStore
+
+    graph = build_graph(sample_chunks)
+    store = NetworkXGraphStore(graph=graph)
+    manifest = store.get_machine_manifest("DCSync")
+    assert len(manifest) == 1
+    assert manifest[0]["machine"] == "htb-winbox"
+    assert manifest[0]["os"] == "windows"
+    assert "DCSync" in manifest[0]["techniques"]
+
+
+def test_get_machine_manifest_category(sample_chunks: list[dict]):
+    from src.infrastructure.networkx_graph import NetworkXGraphStore
+
+    graph = build_graph(sample_chunks)
+    store = NetworkXGraphStore(graph=graph)
+    manifest = store.get_machine_manifest("Active Directory")
+    assert len(manifest) >= 1
+    assert any(m["machine"] == "htb-winbox" for m in manifest)
+
+
+def test_get_machine_manifest_unknown():
+    import networkx as nx
+    from src.infrastructure.networkx_graph import NetworkXGraphStore
+
+    store = NetworkXGraphStore(graph=nx.DiGraph())
+    assert store.get_machine_manifest("NonExistentTechnique") == []
+
+
+def test_get_manifest_for_query(sample_chunks: list[dict]):
+    from src.infrastructure.networkx_graph import NetworkXGraphStore
+
+    graph = build_graph(sample_chunks)
+    store = NetworkXGraphStore(graph=graph)
+    manifest = store.get_manifest_for_query("DCSync attack in Active Directory")
+    assert len(manifest) >= 1
+    assert manifest[0]["machine"] == "htb-winbox"
+    assert "techniques" in manifest[0]
+
