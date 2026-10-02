@@ -54,6 +54,36 @@ _MAX_CONTEXT_CHARS = 18000   # Broad queries retrieve 25 chunks; modern LLMs han
 _MAX_CHUNK_CHARS   = 1500
 
 
+def compress_context_chunk(text: str, max_chars: int = _MAX_CHUNK_CHARS) -> str:
+    """Intelligently compress retrieved chunk text to maximize informational density.
+
+    - Strips long hex / base64 payloads to save context budget
+    - Removes repetitive ASCII terminal dividers and blank lines
+    - Ensures code fences remain balanced
+    - Retains vital exploit commands, paths, and output banners
+    """
+    if not text:
+        return ""
+
+    # Strip long hex dumps (> 40 hex chars)
+    compressed = re.sub(r"\b[0-9a-fA-F]{40,}\b", "[hex data omitted]", text)
+    # Strip long base64 strings (> 50 chars)
+    compressed = re.sub(r"[A-Za-z0-9+/=]{50,}", "[base64 omitted]", compressed)
+    # Collapse repetitive terminal dividers (e.g. ------ or ======)
+    compressed = re.sub(r"[-=~_*]{5,}", "-----", compressed)
+    # Collapse multiple blank lines
+    compressed = re.sub(r"\n{3,}", "\n\n", compressed)
+
+    if len(compressed) > max_chars:
+        compressed = compressed[:max_chars].rstrip() + "\n... [truncated]"
+
+    # Ensure unclosed code fences are properly terminated
+    if compressed.count("```") % 2 != 0:
+        compressed += "\n```"
+
+    return compressed
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  Context formatting
 # ═════════════════════════════════════════════════════════════════════════════
@@ -62,7 +92,7 @@ def format_context(retrieval_result: dict[str, Any] | RetrievalResult) -> str:
     """Build a context string from retrieval results.
 
     * Prepends verified graph findings (technique → machines mapping) when available.
-    * Appends each chunk truncated to ~1200 chars.
+    * Appends each chunk compressed to remove terminal noise.
     * Appends complete machine manifest table when available.
     * Total output capped at context budget.
     """
@@ -94,15 +124,17 @@ def format_context(retrieval_result: dict[str, Any] | RetrievalResult) -> str:
         parts.append(header)
         used += len(header)
 
-    # ── Chunk excerpts ───────────────────────────────────────────────────
+    # ── Chunk excerpts with Context Compression ──────────────────────────
     for chunk in retrieval_result.get("chunks", []):
         meta   = chunk.get("metadata", {})
         source = meta.get("source", "?")
         bc     = meta.get("breadcrumb", "")
-        text   = chunk.get("text", "")[:_MAX_CHUNK_CHARS]
+        parent = meta.get("parent_path") or bc
+        raw_text = chunk.get("text", "")
+        text   = compress_context_chunk(raw_text, max_chars=_MAX_CHUNK_CHARS)
 
         block = (
-            f"--- {source} | {bc} ---\n"
+            f"--- {source} | {parent} ---\n"
             f"{text}\n"
         )
 

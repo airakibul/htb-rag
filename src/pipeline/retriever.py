@@ -231,6 +231,7 @@ class HybridRetriever:
             "scope": enh.query_scope,
             "expanded_terms": enh.expanded_terms,
             "expanded_query": enh.expanded_query,
+            "multi_queries": enh.multi_queries,
         }
 
     # ── Main retrieve entry-point ────────────────────────────────────────
@@ -267,21 +268,36 @@ class HybridRetriever:
         # ── Scope-based Top-K and Candidate Pool ────────────────────────────
         scope = intent.get("scope", "specific")
         is_broad = (scope == "broad")
+        multi_target = any(
+            w in q_lower
+            for w in [
+                "which htb", "which machines", "what machines", "across htb",
+                "demonstrate", "machines demonstrate", "htb machines", "machines have",
+                "machines allow", "machines involve", "list machines",
+            ]
+        )
 
         if is_broad:
             effective_top_k = max(top_k, 25)
             candidate_pool = 100
+        elif multi_target:
+            effective_top_k = max(top_k, 14)
+            candidate_pool = 60
         else:
             effective_top_k = min(top_k, 8) if top_k else 6
             candidate_pool = 35
 
-        # Three retrieval channels
-        bm25_hits   = self.bm25_search(expanded_query, top_k=candidate_pool, os_filter=os_val)
-        vector_hits = self.vector_search(expanded_query, top_k=candidate_pool, where=where)
+        # Multi-Query Retrieval: search across query reformulations and fuse
+        multi_queries = intent.get("multi_queries") or [expanded_query]
+        all_bm25_hits: list[dict[str, Any]] = []
+        all_vector_hits: list[dict[str, Any]] = []
+        for mq in multi_queries[:3]:
+            all_bm25_hits.extend(self.bm25_search(mq, top_k=candidate_pool, os_filter=os_val))
+            all_vector_hits.extend(self.vector_search(mq, top_k=candidate_pool, where=where))
         graph_hits  = self.graph_store.query_graph(query)
 
-        # Fuse BM25 + vector
-        merged = self.reciprocal_rank_fusion(bm25_hits, vector_hits, k=60)
+        # Fuse BM25 + vector across all multi-query channels
+        merged = self.reciprocal_rank_fusion(all_bm25_hits, all_vector_hits, k=60)
 
         # Phase Boost: boost chunks matching target attack phase in metadata or breadcrumb
         target_phase = intent.get("phase")
@@ -304,6 +320,27 @@ class HybridRetriever:
                 chunk_cves = str(chunk.get("metadata", {}).get("cve_ids", "")).upper()
                 if any(tc in chunk_cves for tc in target_cves):
                     chunk["rrf_score"] = chunk.get("rrf_score", 0.0) * 5.0
+
+        # Exploitation Verification Filter: downweight pure recon/nmap noise when query targets exploit/privesc
+        is_exploit_query = any(w in q_lower for w in [
+            "exploit", "exploited", "privilege escalation", "privesc", "root",
+            "rce", "remote code", "breakout", "escape", "abused", "shell", "cve"
+        ])
+        if is_exploit_query:
+            for chunk in merged:
+                meta = chunk.get("metadata", {})
+                chunk_phase = meta.get("attack_phase", "").lower()
+                bc = meta.get("breadcrumb", "").lower()
+                text_low = chunk.get("text", "").lower()
+
+                # Check if chunk is purely an Nmap port scan table without actual exploit commands
+                is_pure_nmap = ("nmap scan report" in text_low or "port   state service" in text_low) and not any(
+                    exp in text_low for exp in ["exploit", "payload", "shell", "root", "vulnerable", "cve-", "pwn", "admin", "ticket"]
+                )
+                if (chunk_phase == "recon" or "recon" in bc) and is_pure_nmap:
+                    chunk["rrf_score"] = chunk.get("rrf_score", 0.0) * 0.4
+                elif is_pure_nmap:
+                    chunk["rrf_score"] = chunk.get("rrf_score", 0.0) * 0.6
 
         # Graph Boost: apply 1.5x score boost to chunks whose source is in graph_hits["relevant_machines"]
         relevant_machines = set(graph_hits.get("relevant_machines", []))
@@ -347,11 +384,11 @@ class HybridRetriever:
         merged.sort(key=lambda x: x.get("rrf_score", 0.0), reverse=True)
 
         # ── Cross-Encoder Re-Ranking ──────────────────────────────────────
-        rerank_pool = min(len(merged), 15)
+        rerank_pool = min(len(merged), 25 if (is_broad or multi_target) else 15)
         merged[:rerank_pool] = self.reranker.rerank(query, merged[:rerank_pool])
 
-        # Source Diversification: allow max 1 chunk per machine for broad queries (max 2 for specific)
-        max_per_machine = 1 if is_broad else 2
+        # Source Diversification: allow max 1 chunk per machine for broad/multi-target queries (max 2 for specific single)
+        max_per_machine = 1 if (is_broad or multi_target) else 2
         diversified: list[dict[str, Any]] = []
         machine_counts: dict[str, int] = {}
 
@@ -368,16 +405,23 @@ class HybridRetriever:
         for rank, chunk in enumerate(diversified, 1):
             chunk["rank"] = rank
 
-        # Dynamic Relative Score-Drop Thresholding (Cross-Encoder Cutoff)
+        # Dynamic Adaptive Relative Score-Drop Thresholding (Cross-Encoder Cutoff & Relaxation)
         final_chunks = diversified
         if not is_broad and len(final_chunks) > 1:
             if "ce_score" in final_chunks[0]:
                 top_ce = final_chunks[0]["ce_score"]
                 kept = [final_chunks[0]]
+                max_top_drop = 7.5 if multi_target else 4.5
+                max_prev_drop = 4.5 if multi_target else 3.0
+
                 for prev, curr in zip(final_chunks[:-1], final_chunks[1:]):
                     prev_ce = prev.get("ce_score", top_ce)
                     curr_ce = curr.get("ce_score", top_ce)
-                    if (top_ce - curr_ce > 4.5) or (prev_ce - curr_ce > 3.0):
+                    if (top_ce - curr_ce > max_top_drop) or (prev_ce - curr_ce > max_prev_drop):
+                        # Threshold Relaxation: ensure at least 2 relevant candidates if reasonable score exists
+                        if len(kept) < 2 and (top_ce - curr_ce < 8.5):
+                            kept.append(curr)
+                            continue
                         break
                     kept.append(curr)
                 final_chunks = kept

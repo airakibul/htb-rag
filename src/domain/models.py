@@ -85,6 +85,7 @@ class EnhancedQuery:
     query_scope: str = "specific"
     target_phase: str | None = None
     difficulty: str | None = None
+    multi_queries: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -97,3 +98,5 @@ class QueryIntent:
     scope: str = "specific"
     expanded_terms: list[str] = field(default_factory=list)
     expanded_query: str = ""
+    multi_queries: list[str] = field(default_factory=list)
+

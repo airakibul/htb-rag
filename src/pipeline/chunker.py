@@ -407,6 +407,8 @@ def chunk_file(md_path: str | Path) -> list[dict[str, Any]]:
             "h3":              h3,
             "h4":              h4,
             "breadcrumb":      bc,
+            "parent_section":  h2,
+            "parent_path":     f"{name} > {h2}",
             "chunk_type":      chunk_type,
             "has_cve":         bool(cves),
             "cve_ids":         cves,

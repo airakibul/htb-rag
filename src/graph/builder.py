@@ -36,8 +36,8 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
     "ADCS": (
         [f"esc{i}" for i in range(1, 17)]
         + [
-            "certipy", "certify", "certificate", "adcs", "template",
-            "certificate template", "ca enrollment",
+            "certipy", "certify", "certificate", "adcs",
+            "certificate template", "ca enrollment", "adcs template",
         ]
     ),
     "Kerberos": [
@@ -64,6 +64,7 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
     "Web": [
         "sqli", "sql injection", "xss", "ssrf", "lfi", "rfi",
         "injection", "burp", "sqlmap", "ssti", "nosql",
+        "jinja", "template injection",
     ],
     "Linux-Privesc": [
         "linux privilege escalation", "linux privesc", "linux priv esc",

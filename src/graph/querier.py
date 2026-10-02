@@ -92,11 +92,17 @@ def query_graph(
     low = query.lower()
 
     # ── Categories (matched by category name, node aliases, or CATEGORY_KEYWORDS) ─
+    def _match_category_kw(kw: str, text: str) -> bool:
+        kw_l = kw.lower()
+        if len(kw_l) <= 4 or " " not in kw_l:
+            return bool(re.search(rf"\b{re.escape(kw_l)}\b", text))
+        return kw_l in text
+
     matched_categories: list[str] = sorted({
         node for node, data in graph.nodes(data=True)
         if data.get("type") == "category" and (
-            node.lower() in low
-            or any(kw in low for kw in data.get("aliases", CATEGORY_KEYWORDS.get(node, [])))
+            _match_category_kw(node, low)
+            or any(_match_category_kw(kw, low) for kw in data.get("aliases", CATEGORY_KEYWORDS.get(node, [])))
         )
     })
     # Filter out opposite OS category if an explicit OS is mentioned

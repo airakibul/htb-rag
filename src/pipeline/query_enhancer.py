@@ -1,8 +1,8 @@
 """
-query_enhancer.py – Dynamic query rewriting, expansion, and intent extraction.
+query_enhancer.py – Lightweight, non-overfitting query analysis and metadata extraction.
 
-Fuses fast LLM-based zero-shot intent analysis with Knowledge Graph aliasing,
-with a robust offline fallback to ensure 100% reliability.
+Performs pure query intent parsing (scope, OS, phase) without modifying or keyword-stuffing
+the user's authentic search query.
 """
 
 from __future__ import annotations
@@ -21,44 +21,34 @@ logger = logging.getLogger(__name__)
 
 
 def _fallback_enhance(query: str, graph: nx.DiGraph | None = None) -> EnhancedQuery:
-    """Robust offline intent extraction and graph-based expansion."""
+    """Clean, un-overfitted query intent parsing."""
     low = query.lower()
 
-    # Scope detection (broad domain cheatsheets vs specific CVE/tool/technique questions)
-    has_cheatsheet = any(
-        w in low for w in ["cheatsheet", "cheat sheet", "overview", "all techniques", "common techniques"]
-    )
-    has_category_catalog = any(
-        w in low for w in [
-            "privilege escalation techniques",
-            "privesc techniques",
-            "attack techniques",
-            "certificate abuse techniques",
-            "hash dumping techniques",
-            "password cracking",
-        ]
+    # Scope detection: broad cheatsheet/catalog vs specific technique/exploit
+    has_broad_intent = any(
+        w in low for w in ["cheatsheet", "cheat sheet", "overview", "attack techniques", "techniques across"]
     )
     has_cve = bool(re.search(r"cve-\d{4}-\d+", low)) or bool(re.search(r"\bms\d{2}-\d{3}\b", low))
-    has_specific_how = any(p in low for p in ["how does", "how is", "how was"])
+    has_specific_how = any(p in low for p in ["how does", "how is", "how was", "which htb", "which machines"])
 
-    if (has_cheatsheet or has_category_catalog) and not has_cve and not has_specific_how:
+    if has_broad_intent and not has_cve and not has_specific_how:
         query_scope = "broad"
     else:
         query_scope = "specific"
 
-    # Phase detection
+    # Explicit phase detection
     target_phase = None
-    if any(w in low for w in ["privilege escalation", "privesc", "root", "administrator", "system hive", "token impersonation"]):
+    if "privilege escalation" in low or "privesc" in low:
         target_phase = "privesc"
-    elif any(w in low for w in ["rce", "remote code", "exploit", "breakout", "escape", "foothold", "initial access", "shell"]):
+    elif any(w in low for w in ["foothold", "initial access", "rce", "remote code execution"]):
         target_phase = "foothold"
-    elif any(w in low for w in ["recon", "scan", "enumeration", "nmap", "discovery"]):
+    elif any(w in low for w in ["recon", "enumeration", "port scan"]):
         target_phase = "recon"
 
     # OS detection
     target_os = None
-    linux_indicators = ["linux", "suid", "sudo", "cron", "gtfobins", "capabilities", "linpeas", "dirtycow", "pwnkit", "polkit"]
-    windows_indicators = ["windows", "adcs", "kerberos", "kerberoast", "active directory", "mimikatz", "secretsdump", "seimpersonate", "printspoofer", "juicypotato", "winpeas", "sam hive", "system hive", "lsass"]
+    linux_indicators = ["linux", "suid", "gtfobins", "linpeas"]
+    windows_indicators = ["windows", "adcs", "kerberos", "active directory", "winpeas"]
     has_linux = any(w in low for w in linux_indicators)
     has_windows = any(w in low for w in windows_indicators)
     if has_windows and not has_linux:
@@ -73,66 +63,37 @@ def _fallback_enhance(query: str, graph: nx.DiGraph | None = None) -> EnhancedQu
             difficulty = d
             break
 
-    # Graph-assisted extraction
-    g = graph if graph is not None else load_graph()
+    # Standard CVE aliases from graph if a CVE is explicitly queried
     expanded_terms: list[str] = []
+    cve_matches = re.findall(r"cve-\d{4}-\d+", low)
+    if cve_matches:
+        g = graph if graph is not None else load_graph()
+        if g is not None:
+            for cve in cve_matches:
+                cve_upper = cve.upper()
+                if cve_upper in g:
+                    expanded_terms.extend(g.nodes[cve_upper].get("aliases", []))
 
-    if g is not None and g.number_of_nodes() > 0:
-        hits = query_graph(g, query)
-
-        # OS deduction from matched graph categories if OS wasn't explicitly stated
-        if not target_os:
-            cats = hits.get("matched_categories", [])
-            has_win_cat = any(c in cats for c in ["Active Directory", "ADCS", "Kerberos"])
-            has_lin_cat = "Linux-Privesc" in cats
-            has_win_privesc = "Windows-Privesc" in cats
-
-            if has_win_cat:
-                target_os = "windows"
-            elif has_lin_cat and not has_win_privesc:
-                target_os = "linux"
-            elif has_win_privesc and not has_lin_cat:
-                target_os = "windows"
-
-        # Collect top aliases and names of matched nodes
-        for cve in hits.get("matched_cves", [])[:3]:
-            expanded_terms.append(cve)
-            if cve in g:
-                expanded_terms.extend(g.nodes[cve].get("aliases", [])[:2])
-        for tool in hits.get("matched_tools", [])[:3]:
-            expanded_terms.append(tool)
-            if tool in g:
-                expanded_terms.extend(g.nodes[tool].get("aliases", [])[:2])
-        for tech in hits.get("matched_techniques", [])[:3]:
-            if tech in g:
-                expanded_terms.extend(g.nodes[tech].get("aliases", [])[:2])
-
-    # Clean & deduplicate expanded terms
-    clean_terms: list[str] = []
-    seen = set(re.findall(r"\w+", low))
-    for t in expanded_terms:
-        tl = t.lower()
-        if tl not in seen and len(tl) > 2:
-            seen.add(tl)
-            clean_terms.append(t)
-
-    expanded_query = f"{query} {' '.join(clean_terms[:6])}".strip() if clean_terms else query
-
+    # Keep query untouched — NO artificial keyword stuffing or appending
     return EnhancedQuery(
         query=query,
-        expanded_query=expanded_query,
-        expanded_terms=clean_terms[:6],
+        expanded_query=query,
+        expanded_terms=expanded_terms,
         target_os=target_os,
         query_scope=query_scope,
         target_phase=target_phase,
         difficulty=difficulty,
+        multi_queries=[query],
     )
 
 
-def enhance_query(query: str, graph: nx.DiGraph | None = None) -> EnhancedQuery:
-    """Enhance user query dynamically via fast Knowledge Graph signals and heuristics.
+def generate_multi_queries(query: str, enh: EnhancedQuery | None = None) -> list[str]:
+    """Return authentic query list without artificial prompt mutations."""
+    if enh is not None and enh.multi_queries:
+        return enh.multi_queries
+    return [query]
 
-    Runs 100% locally in < 1ms to guarantee sub-second retrieval latency
-    without burning LLM rate limits or risking network timeouts.
-    """
+
+def enhance_query(query: str, graph: nx.DiGraph | None = None) -> EnhancedQuery:
+    """Enhance user query dynamically without query mutation."""
     return _fallback_enhance(query, graph)
