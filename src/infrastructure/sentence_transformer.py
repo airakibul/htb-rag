@@ -20,7 +20,7 @@ from src.domain.interfaces import EmbeddingService
 
 logger = logging.getLogger(__name__)
 
-# Lazy-loaded SentenceTransformer embedding model singleton
+# Lazy-loaded SentenceTransformer embedding model singleton (False = sentinel if load fails)
 _embed_model: Any = None
 
 
@@ -36,13 +36,16 @@ def _get_embed_model(model_name: str = EMBEDDING_MODEL_NAME) -> Any:
             except Exception:
                 _embed_model = SentenceTransformer(model_name)
             # Increase sequence length from 256 to 512 to prevent semantic truncation underfitting on ~2400 char chunks
-            if hasattr(_embed_model, "max_seq_length") and _embed_model.max_seq_length < 512:
-                _embed_model.max_seq_length = 512
+            cur_seq_len = getattr(_embed_model, "max_seq_length", None)
+            if cur_seq_len is not None and cur_seq_len < 512:
+                setattr(_embed_model, "max_seq_length", 512)
             logger.info(f"✅ Loaded SentenceTransformer model: {model_name} (max_seq_length={getattr(_embed_model, 'max_seq_length', 512)})")
         except Exception as exc:
-            logger.error(f"❌ Failed to load SentenceTransformer: {exc}")
-            raise
-    return _embed_model
+            logger.warning(
+                f"SentenceTransformer unavailable on this system ({exc}); falling back to deterministic local hash vectorizer."
+            )
+            _embed_model = False  # sentinel: don't retry failed import
+    return _embed_model if _embed_model is not False else None
 
 
 def _local_hash_embedding(text: str, dim: int = 384) -> list[float]:
@@ -72,8 +75,10 @@ class SentenceTransformerEmbeddingService(EmbeddingService):
         """Batch-embed multiple texts using local SentenceTransformer with zero rate limits."""
         if not texts:
             return []
+        model = _get_embed_model(self.model_name)
+        if not model:
+            return [_local_hash_embedding(t, dim=384) for t in texts]
         try:
-            model = _get_embed_model(self.model_name)
             embeddings = model.encode(
                 texts,
                 batch_size=min(len(texts), 128),
@@ -83,14 +88,16 @@ class SentenceTransformerEmbeddingService(EmbeddingService):
             return embeddings.tolist()
         except Exception as exc:
             logger.warning(
-                f"SentenceTransformer failed ({exc}); falling back to local hash vectorizer."
+                f"SentenceTransformer encoding failed ({exc}); falling back to local hash vectorizer."
             )
             return [_local_hash_embedding(t, dim=384) for t in texts]
 
     def embed_query(self, query: str) -> list[float]:
         """Embed a single query string using local SentenceTransformer."""
+        model = _get_embed_model(self.model_name)
+        if not model:
+            return _local_hash_embedding(query, dim=384)
         try:
-            model = _get_embed_model(self.model_name)
             embedding = model.encode(query, normalize_embeddings=True)
             return embedding.tolist()
         except Exception as exc:

@@ -27,18 +27,32 @@ class SemanticIntentRouter(IntentClassifier):
     """Zero-shot / exemplar-based semantic intent classifier."""
 
     def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2") -> None:
-        from sentence_transformers import SentenceTransformer
-
+        self.model: Any = None
         try:
-            self.model = SentenceTransformer(model_name, local_files_only=True)
-        except Exception:
+            from sentence_transformers import SentenceTransformer
+
             try:
-                # Fallback to local name without prefix
-                self.model = SentenceTransformer("all-MiniLM-L6-v2", local_files_only=True)
+                self.model = SentenceTransformer(model_name, local_files_only=True)
             except Exception:
-                self.model = SentenceTransformer(model_name)
+                try:
+                    # Fallback to local name without prefix
+                    self.model = SentenceTransformer("all-MiniLM-L6-v2", local_files_only=True)
+                except Exception:
+                    self.model = SentenceTransformer(model_name)
+        except Exception as exc:
+            logger.warning(
+                f"SentenceTransformer unavailable for IntentRouter ({exc}); using fallback embedder."
+            )
+            self.model = None
 
         self._init_centroids()
+
+    def _encode_texts(self, texts: list[str]) -> np.ndarray:
+        """Encode texts using SentenceTransformer or fallback embedder."""
+        if self.model is not None:
+            return np.array(self.model.encode(texts, normalize_embeddings=True))
+        from src.infrastructure.sentence_transformer import embed_texts
+        return np.array(embed_texts(texts))
 
     def _init_centroids(self) -> None:
         """Precompute normalized centroids for broad and specific intent anchors."""
@@ -69,8 +83,8 @@ class SemanticIntentRouter(IntentClassifier):
             "Detailed procedure to execute this specific attack technique",
         ]
 
-        self.broad_emb = self.model.encode(broad_exemplars, normalize_embeddings=True)
-        self.specific_emb = self.model.encode(specific_exemplars, normalize_embeddings=True)
+        self.broad_emb = self._encode_texts(broad_exemplars)
+        self.specific_emb = self._encode_texts(specific_exemplars)
 
         self.broad_centroid = np.mean(self.broad_emb, axis=0)
         self.broad_centroid /= np.linalg.norm(self.broad_centroid)
@@ -95,7 +109,7 @@ class SemanticIntentRouter(IntentClassifier):
         else:
             # Multi-prototype / k-NN exemplar matching (average top 3 similarities)
             # Prevents high-bias underfitting caused by single-centroid averaging
-            q_emb = self.model.encode([query], normalize_embeddings=True)[0]
+            q_emb = self._encode_texts([query])[0]
             broad_scores = np.dot(self.broad_emb, q_emb)
             specific_scores = np.dot(self.specific_emb, q_emb)
 
