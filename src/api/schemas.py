@@ -29,4 +29,4 @@ class QueryResponse(BaseModel):
 
 class RetrieveRequest(BaseModel):
     question: str
-    top_k: int = 5
+    top_k: int = 8

@@ -72,9 +72,8 @@ def test_retrieve_manifest_injection_broad():
 
     result = retriever.retrieve("Linux privilege escalation cheatsheet")
     assert isinstance(result, RetrievalResult)
-    assert result.manifest == sample_manifest
-    # Test dictionary-like compatibility
-    assert result["manifest"] == sample_manifest
+    # Manifest injection is disabled to eliminate overfitting
+    assert result.manifest is None
     assert result.get("graph") == {"relevant_machines": []}
 
 

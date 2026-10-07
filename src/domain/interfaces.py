@@ -152,3 +152,13 @@ class ChunkingStrategy(ABC):
     ) -> list[dict[str, Any]]:
         """Chunk raw text into structured chunk dicts."""
         ...
+
+
+class IntentClassifier(ABC):
+    """Abstract interface for query intent classification and routing."""
+
+    @abstractmethod
+    def classify_intent(self, query: str) -> dict[str, Any]:
+        """Classify query into scope (broad/specific), target OS, and phase."""
+        ...
+

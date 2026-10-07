@@ -87,9 +87,9 @@ class HybridRetriever:
         # Load every document from VectorStore
         self.docs: list[dict[str, Any]] = self.vector_store.get_all_documents()
 
-        # Build BM25 index (lowercase tokenised)
+        # Build BM25 index (lowercase tokenised with punctuation stripping)
         corpus = [
-            doc["text"].lower().split() for doc in self.docs
+            self._tokenize(doc["text"]) for doc in self.docs
         ]
         self.bm25 = BM25Okapi(corpus) if corpus else None
 
@@ -105,6 +105,24 @@ class HybridRetriever:
 
     # ── BM25 (lexical) ──────────────────────────────────────────────────
 
+    @staticmethod
+    def _tokenize(text: str) -> list[str]:
+        """Cyber-aware tokenization: preserves compound identifiers while indexing sub-tokens."""
+        tokens: list[str] = []
+        raw_words = text.lower().split()
+        for w in raw_words:
+            clean = w.strip("?,.!\"':;()[]{}<>`~*")
+            if not clean:
+                continue
+            tokens.append(clean)
+            # Sub-token splitting on delimiters common in code, CVEs, tools, and scripts
+            if any(delim in clean for delim in ("-", "_", ".", "/", "\\", ":")):
+                sub_parts = re.split(r"[-_./\\:]+", clean)
+                for part in sub_parts:
+                    if len(part) > 1 and part != clean:
+                        tokens.append(part)
+        return tokens
+
     def bm25_search(
         self, query: str, top_k: int = TOP_K, os_filter: str | None = None,
     ) -> list[dict[str, Any]]:
@@ -112,19 +130,19 @@ class HybridRetriever:
         if not self.bm25 or not self.docs:
             return []
 
-        words = [w.strip("?,.!\"':;") for w in query.lower().split()]
-        clean_tokens = [w for w in words if w and w not in STOPWORDS]
-        tokens = clean_tokens if clean_tokens else [w for w in words if w]
+        words = self._tokenize(query)
+        clean_tokens = [w for w in words if w not in STOPWORDS]
+        tokens = clean_tokens if clean_tokens else words
         if not tokens:
             tokens = query.lower().split()
         scores = self.bm25.get_scores(tokens)
 
-        # Filter candidate indices by OS if specified
+        # Filter candidate indices by OS if specified (keep unknown OS to prevent false negatives)
         valid_indices = []
         for idx, doc in enumerate(self.docs):
             if os_filter:
                 doc_os = doc.get("metadata", {}).get("os", "unknown")
-                if doc_os != os_filter:
+                if doc_os not in (os_filter, "unknown"):
                     continue
             valid_indices.append(idx)
 
@@ -164,16 +182,21 @@ class HybridRetriever:
         bm25_results: list[dict[str, Any]],
         vector_results: list[dict[str, Any]],
         k: int = 60,
+        extra_results: list[list[dict[str, Any]]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Merge two ranked lists using RRF (k = 60 by default).
+        """Merge ranked lists using principled multi-channel RRF (k = 60 by default).
 
         Each document is keyed by its text MD5 hash to allow
-        matching across the two result sets.
+        matching across the result sets.
         """
         scores: dict[str, float] = {}
         doc_map: dict[str, dict[str, Any]] = {}
 
-        for result_list in (bm25_results, vector_results):
+        all_lists = [bm25_results, vector_results]
+        if extra_results:
+            all_lists.extend(extra_results)
+
+        for result_list in all_lists:
             for item in result_list:
                 key = hashlib.md5(item["text"].encode("utf-8")).hexdigest()
                 scores[key] = scores.get(key, 0.0) + 1.0 / (k + item["rank"])
@@ -263,132 +286,64 @@ class HybridRetriever:
 
         where = self.build_where_filter(os_val, diff_val)
 
-        q_lower = query.lower()
-
-        # ── Scope-based Top-K and Candidate Pool ────────────────────────────
+        # ── Scope-based settings ──────────────────────────────────────────
         scope = intent.get("scope", "specific")
         is_broad = (scope == "broad")
-        multi_target = any(
-            w in q_lower
-            for w in [
-                "which htb", "which machines", "what machines", "across htb",
-                "demonstrate", "machines demonstrate", "htb machines", "machines have",
-                "machines allow", "machines involve", "list machines",
-            ]
-        )
 
-        if is_broad:
-            effective_top_k = top_k or 8
-            candidate_pool = 80
-        elif multi_target:
-            effective_top_k = max(top_k, 14)
-            candidate_pool = 60
-        else:
-            effective_top_k = min(top_k, 8) if top_k else 6
-            candidate_pool = 35
+        # Dynamically size top_k to avoid underfitting broad questions
+        base_k = top_k or 8
+        effective_top_k = max(base_k, 12 if is_broad else base_k)
+        candidate_pool = 60
 
-        # Multi-Query Retrieval: search across query reformulations and fuse
-        multi_queries = intent.get("multi_queries") or [expanded_query]
-        all_bm25_hits: list[dict[str, Any]] = []
-        all_vector_hits: list[dict[str, Any]] = []
-        for mq in multi_queries[:3]:
-            all_bm25_hits.extend(self.bm25_search(mq, top_k=candidate_pool, os_filter=os_val))
-            all_vector_hits.extend(self.vector_search(mq, top_k=candidate_pool, where=where))
-        graph_hits  = self.graph_store.query_graph(query)
+        # ── Stage 1: Candidate Generation (BM25 + Dense Vector + KG Grounding)
+        bm25_hits = self.bm25_search(query, top_k=candidate_pool, os_filter=os_val)
+        vector_hits = self.vector_search(query, top_k=candidate_pool, where=where)
+        graph_hits = self.graph_store.query_graph(query)
 
-        # Fuse BM25 + vector across all multi-query channels
-        merged = self.reciprocal_rank_fusion(all_bm25_hits, all_vector_hits, k=60)
-
-        # Phase Boost: boost chunks matching target attack phase in metadata or breadcrumb
-        target_phase = intent.get("phase")
-        if target_phase:
-            for chunk in merged:
-                meta = chunk.get("metadata", {})
-                chunk_phase = meta.get("attack_phase", "").lower()
-                bc = meta.get("breadcrumb", "").lower()
-                if chunk_phase == target_phase or target_phase in bc:
-                    chunk["rrf_score"] = chunk.get("rrf_score", 0.0) * 1.4
-
-        # Specific CVE Boost: exact match in cve_ids gets 5x score
-        target_cves = {c.upper() for c in re.findall(r"cve-\d{4}-\d+", q_lower)}
-        for term in intent.get("expanded_terms", []) + graph_hits.get("matched_cves", []):
-            for cve in re.findall(r"cve-\d{4}-\d+", str(term), re.IGNORECASE):
-                target_cves.add(cve.upper())
-
-        if target_cves:
-            for chunk in merged:
-                chunk_cves = str(chunk.get("metadata", {}).get("cve_ids", "")).upper()
-                if any(tc in chunk_cves for tc in target_cves):
-                    chunk["rrf_score"] = chunk.get("rrf_score", 0.0) * 5.0
-
-        # Exploitation Verification Filter: downweight pure recon/nmap noise when query targets exploit/privesc
-        is_exploit_query = any(w in q_lower for w in [
-            "exploit", "exploited", "privilege escalation", "privesc", "root",
-            "rce", "remote code", "breakout", "escape", "abused", "shell", "cve"
-        ])
-        if is_exploit_query:
-            for chunk in merged:
-                meta = chunk.get("metadata", {})
-                chunk_phase = meta.get("attack_phase", "").lower()
-                bc = meta.get("breadcrumb", "").lower()
-                text_low = chunk.get("text", "").lower()
-
-                # Check if chunk is purely an Nmap port scan table without actual exploit commands
-                is_pure_nmap = ("nmap scan report" in text_low or "port   state service" in text_low) and not any(
-                    exp in text_low for exp in ["exploit", "payload", "shell", "root", "vulnerable", "cve-", "pwn", "admin", "ticket"]
-                )
-                if (chunk_phase == "recon" or "recon" in bc) and is_pure_nmap:
-                    chunk["rrf_score"] = chunk.get("rrf_score", 0.0) * 0.4
-                elif is_pure_nmap:
-                    chunk["rrf_score"] = chunk.get("rrf_score", 0.0) * 0.6
-
-        # Graph Boost: apply 1.5x score boost to chunks whose source is in graph_hits["relevant_machines"]
+        # Principled Knowledge Graph grounding as an explicit RRF rank channel
+        extra_channels: list[list[dict[str, Any]]] = []
         relevant_machines = set(graph_hits.get("relevant_machines", []))
         if relevant_machines:
-            for chunk in merged:
-                src = chunk.get("metadata", {}).get("source", "")
+            seen_texts: set[str] = set()
+            graph_ranked: list[dict[str, Any]] = []
+            for hit in (vector_hits + bm25_hits):
+                t = hit.get("text", "")
+                if t in seen_texts:
+                    continue
+                seen_texts.add(t)
+                src = hit.get("metadata", {}).get("source", "")
                 if src in relevant_machines:
-                    chunk["rrf_score"] = chunk.get("rrf_score", 0.0) * 1.5
+                    hit_copy = dict(hit)
+                    hit_copy["rank"] = len(graph_ranked) + 1
+                    graph_ranked.append(hit_copy)
+            if graph_ranked:
+                extra_channels.append(graph_ranked)
 
-        # ── OS Enforcement for Broad Queries ────────────────────────────────
-        if is_broad and os_val:
-            os_lower = os_val.lower()
-            os_filtered = [
-                c for c in merged
-                if c.get("metadata", {}).get("os", "unknown").lower() in (os_lower, "unknown")
-            ]
-            if len(os_filtered) >= effective_top_k:
-                merged = os_filtered
+        # Multi-Channel Reciprocal Rank Fusion (standard k=60 without magic multipliers)
+        merged = self.reciprocal_rank_fusion(
+            bm25_hits, vector_hits, k=60, extra_results=extra_channels
+        )
 
-        # ── Step 3: Fast Lexical-Semantic Re-Ranking ────────────────────────
-        query_keywords = [
-            w.strip(".") for w in re.findall(r'[A-Za-z0-9_\-\.]+', q_lower)
-            if len(w.strip(".")) > 2 and w.strip(".") not in STOPWORDS
-        ]
-        if query_keywords and merged:
-            max_rrf = max((c.get("rrf_score", 0.0) for c in merged), default=1.0)
-            if max_rrf <= 0:
-                max_rrf = 1.0
-            for item in merged:
-                chunk_meta = item.get("metadata", {})
-                density = _compute_lexical_density(
-                    query_keywords,
-                    item.get("text", ""),
-                    chunk_meta.get("breadcrumb", "")
-                )
-                norm_score = item.get("rrf_score", 0.0) / max_rrf
-                combined_score = norm_score * 0.7 + density * 0.3
-                item["score"] = combined_score
-                item["rrf_score"] = combined_score
-
+        # Sort after fusion
         merged.sort(key=lambda x: x.get("rrf_score", 0.0), reverse=True)
 
-        # ── Cross-Encoder Re-Ranking ──────────────────────────────────────
-        rerank_pool = min(len(merged), 25 if (is_broad or multi_target) else 15)
+        # ── Stage 2: Cross-Encoder Re-Ranking on top candidate pool ───────
+        rerank_pool = min(len(merged), 35)
         merged[:rerank_pool] = self.reranker.rerank(query, merged[:rerank_pool])
 
-        # Source Diversification: allow max 1 chunk per machine for broad/multi-target queries (max 2 for specific single)
-        max_per_machine = 1 if (is_broad or multi_target) else 2
+        # ── Stage 3: Source Diversification ───────────────────────────────
+        # Target-aware diversification:
+        # - Broad survey queries: max 1 chunk per machine to maximize coverage breadth.
+        # - Machine-specific queries: do not starve the target machine of its multi-step walkthrough.
+        # - General queries: allow up to 3 chunks per machine to preserve multi-step exploit chains.
+        targets_specific_machine = bool(re.search(r"\bhtb-[a-z0-9_-]+\b", query.lower()))
+        if targets_specific_machine:
+            max_per_machine = effective_top_k
+        elif is_broad:
+            max_per_machine = 1
+        else:
+            max_per_machine = 3
+
         diversified: list[dict[str, Any]] = []
         machine_counts: dict[str, int] = {}
 
@@ -401,46 +356,19 @@ class HybridRetriever:
             if len(diversified) >= effective_top_k:
                 break
 
-        # Re-rank
         for rank, chunk in enumerate(diversified, 1):
             chunk["rank"] = rank
 
-        # Dynamic Adaptive Relative Score-Drop Thresholding (Cross-Encoder Cutoff & Relaxation)
         final_chunks = diversified
-        if not is_broad and len(final_chunks) > 1:
-            if "ce_score" in final_chunks[0]:
-                top_ce = final_chunks[0]["ce_score"]
-                kept = [final_chunks[0]]
-                max_top_drop = 7.5 if multi_target else 4.5
-                max_prev_drop = 4.5 if multi_target else 3.0
 
-                for prev, curr in zip(final_chunks[:-1], final_chunks[1:]):
-                    prev_ce = prev.get("ce_score", top_ce)
-                    curr_ce = curr.get("ce_score", top_ce)
-                    if (top_ce - curr_ce > max_top_drop) or (prev_ce - curr_ce > max_prev_drop):
-                        # Threshold Relaxation: ensure at least 2 relevant candidates if reasonable score exists
-                        if len(kept) < 2 and (top_ce - curr_ce < 8.5):
-                            kept.append(curr)
-                            continue
-                        break
-                    kept.append(curr)
-                final_chunks = kept
-            else:
-                top_score = final_chunks[0].get("rrf_score", 0.0)
-                final_chunks = [c for c in final_chunks if c.get("rrf_score", 0.0) >= top_score * 0.50]
-
-        # ── Graph-Assisted Manifest Injection ──────────────────
+        # ── Authentic Retrieval Result (Zero Manifest Injection / Zero Overfitting) ──
         manifest = None
-        if is_broad:
-            manifest = self.graph_store.get_manifest_for_query(query, os_filter=os_val)
-            if manifest:
-                logger.info(f"📋 Manifest injection: {len(manifest)} machines for broad query")
-
 
         return RetrievalResult(
             chunks=final_chunks[:effective_top_k],
             graph_hits=graph_hits,
             query=query,
             filters_applied={"os": os_val, "difficulty": diff_val},
-            manifest=manifest,  # NEW
+            manifest=manifest,
         )
+

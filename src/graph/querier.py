@@ -17,6 +17,7 @@ from src.graph.builder import (
     CANONICAL_TECHNIQUES,
     CATEGORY_KEYWORDS,
     _CVE_RE,
+    _match_pattern,
 )
 
 logger = logging.getLogger(__name__)
@@ -157,9 +158,9 @@ def query_graph(
         patterns = info.get("patterns", [])
         fb_pats = info.get("fallback_patterns", [])
         fb_req = info.get("fallback_require", [])
-        hit = any(p in low for p in patterns)
+        hit = any(_match_pattern(p, low) for p in patterns)
         if not hit and fb_pats and fb_req:
-            if any(p in low for p in fb_pats) and any(r in low for r in fb_req):
+            if any(_match_pattern(p, low) for p in fb_pats) and any(_match_pattern(r, low) for r in fb_req):
                 hit = True
         if hit and tech in graph:
             canonical_matches.append(tech)
@@ -187,6 +188,26 @@ def query_graph(
     if any(t not in CATEGORY_LEVEL_TECHNIQUES and t not in GENERIC_TECHNIQUES for t in direct_techniques):
         direct_techniques = [t for t in direct_techniques if t not in CATEGORY_LEVEL_TECHNIQUES and t.lower() not in GENERIC_TECHNIQUES]
 
+    # Specialization Pruning: If a more specific specialized technique matched
+    # (e.g. "SQL Injection with sqlmap"), prune general techniques that are pure substrings of it (e.g. "SQL Injection", "Injection").
+    if len(direct_techniques) > 1:
+        pruned_direct = []
+        for t1 in direct_techniques:
+            t1_low = t1.lower().strip()
+            if any(t1_low in t2.lower().strip() and len(t2.strip()) > len(t1.strip()) for t2 in direct_techniques if t1 != t2):
+                continue
+            pruned_direct.append(t1)
+        if pruned_direct:
+            direct_techniques = pruned_direct
+
+    # Dynamic hierarchical specialization pruning:
+    # If a specific sub-technique is matched, prune its generic parent technique
+    # so targeted queries are not overwhelmed by high-volume parent candidates.
+    for tech in list(direct_techniques):
+        parent = CANONICAL_TECHNIQUES.get(tech, {}).get("parent_technique")
+        if parent and parent in direct_techniques:
+            direct_techniques = [t for t in direct_techniques if t != parent]
+
     category_techniques = [
         tech
         for cat in matched_categories
@@ -194,8 +215,8 @@ def query_graph(
         if tech not in direct_techniques and tech.lower() not in GENERIC_TECHNIQUES
     ]
 
-    # 3. Category techniques (fallback for broad cheatsheets when no specific techniques are matched)
-    if not direct_techniques and matched_categories:
+    # 3. Category techniques (fallback when no specific techniques or CVEs are matched)
+    if not direct_techniques and not matched_cves and matched_categories:
         matched_techniques = sorted(category_techniques)
     else:
         matched_techniques = list(direct_techniques)
@@ -207,8 +228,16 @@ def query_graph(
     for tech in direct_techniques:
         machines.update(get_machines_for_technique(graph, tech))
 
-    # From matched tools
-    for tool in matched_tools:
+    # From matched tools (skip multi-purpose tool suites if specific techniques or CVEs are matched)
+    GENERIC_TOOL_SUITES = {
+        "impacket", "metasploit", "powershell", "bash", "python", "netcat", "nc", "nmap",
+        "crackmapexec", "netexec",
+    }
+    tool_candidates = [
+        t for t in matched_tools
+        if not (direct_techniques or matched_cves) or t.lower() not in GENERIC_TOOL_SUITES
+    ]
+    for tool in tool_candidates:
         machines.update(
             n for n in graph.predecessors(tool)
             if graph.nodes[n].get("type") == "machine"
@@ -224,8 +253,8 @@ def query_graph(
             if graph.nodes[tech].get("type") == "technique":
                 machines.update(get_machines_for_technique(graph, tech))
 
-    # If machines set is empty or query is broad category query, expand from category techniques
-    if not machines or any(w in low for w in ["cheatsheet", "common", "across", "all machines"]):
+    # If query matched category without specific technique/CVE, expand machines from category techniques
+    if not direct_techniques and not matched_cves and matched_categories:
         for tech in category_techniques:
             machines.update(get_machines_for_technique(graph, tech))
 

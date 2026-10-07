@@ -35,7 +35,10 @@ def _get_embed_model(model_name: str = EMBEDDING_MODEL_NAME) -> Any:
                 _embed_model = SentenceTransformer(model_name, local_files_only=True)
             except Exception:
                 _embed_model = SentenceTransformer(model_name)
-            logger.info(f"✅ Loaded SentenceTransformer model: {model_name}")
+            # Increase sequence length from 256 to 512 to prevent semantic truncation underfitting on ~2400 char chunks
+            if hasattr(_embed_model, "max_seq_length") and _embed_model.max_seq_length < 512:
+                _embed_model.max_seq_length = 512
+            logger.info(f"✅ Loaded SentenceTransformer model: {model_name} (max_seq_length={getattr(_embed_model, 'max_seq_length', 512)})")
         except Exception as exc:
             logger.error(f"❌ Failed to load SentenceTransformer: {exc}")
             raise

@@ -81,7 +81,7 @@ class GroqProvider(LLMProvider):
         try:
             from groq import Groq
 
-            client: Any = Groq(api_key=self.api_key, timeout=self.timeout, max_retries=0)
+            client: Any = Groq(api_key=self.api_key, timeout=self.timeout, max_retries=3)
             logger.info(f"Synthesizing answer via Groq ({self.model})...")
             messages: Any = [
                 {"role": "system", "content": system_prompt},

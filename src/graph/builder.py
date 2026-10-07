@@ -50,7 +50,7 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "bloodhound", "sharphound", "writeowner", "genericall", "writedacl",
         "genericwrite", "acl", "shadow credential", "dcsync", "secretsdump",
         "delegation", "rbcd", "unconstrained delegation", "constrained delegation",
-        "gpo abuse", "ntds.dit", "kerberoast", "as-rep", "adcs",
+        "gpo abuse", "ntds.dit",
     ],
     "Password Cracking": [
         "password cracking", "hash dumping", "hashcat", "john the ripper",
@@ -70,7 +70,7 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
     "Linux-Privesc": [
         "linux privilege escalation", "linux privesc", "linux priv esc",
         "privilege escalation", "privesc",
-        "sudo", "suid", "cron", "capabilities", "gtfobins", "dirtycow",
+        "sudo -l", "sudoers", "suid", "cron", "capabilities", "gtfobins", "dirtycow",
         "pwnkit", "no_root_squash", "path hijack", "cap_setuid",
     ],
     "Windows-Privesc": [
@@ -140,13 +140,21 @@ CANONICAL_TECHNIQUES: dict[str, dict[str, Any]] = {
     # ── Linux Privilege Escalation ───────────────────────────────────────────
     "SUID / GTFOBins": {
         "category": "Linux-Privesc",
-        "os": "linux",
-        "patterns": ["suid", "gtfobins", "perm -4000", "setuid", "perm /4000"],
+        "exclude_os": "windows",
+        "patterns": [
+            "gtfobins",
+            r"suid (?:binary|privesc|exploit|abuse|wrapper|helper|escalation)",
+            r"(?:custom|vulnerable)\s+suid",
+            r"(?:abuse|exploit)\w*\s+(?:the\s+)?suid",
+            r"suid.*root shell",
+            r"suid bit.*privilege",
+            "setuid(0)",
+        ],
     },
     "Sudo Misconfiguration": {
         "category": "Linux-Privesc",
         "os": "linux",
-        "patterns": ["sudo", "sudoers", "sudoedit", "sudo -l"],
+        "patterns": ["sudo -l", "sudoers", "sudoedit", "nopasswd", "sudo privesc", "sudo privilege escalation"],
     },
     "Cron Job Exploitation": {
         "category": "Linux-Privesc",
@@ -200,13 +208,13 @@ CANONICAL_TECHNIQUES: dict[str, dict[str, Any]] = {
         "category": "Active Directory",
         "secondary_category": "Kerberos",
         "os": "windows",
-        "patterns": ["kerberoast", "kerberoasting", "getuserspns", "spn", "13100"],
+        "patterns": ["kerberoast", "kerberoasting", "getuserspns", "spn roasting", "13100", "request-spn"],
     },
     "DCSync Attack": {
         "category": "Active Directory",
         "secondary_category": "Password Cracking",
         "os": "windows",
-        "patterns": ["dcsync", "ds-replication", "getncchanges", "drsuapi"],
+        "patterns": ["dcsync", "ds-replication", "getncchanges", "drsuapi", "secretsdump.*-just-dc"],
     },
     "ADCS Certificate Abuse": {
         "category": "Active Directory",
@@ -246,6 +254,11 @@ CANONICAL_TECHNIQUES: dict[str, dict[str, Any]] = {
         "os": "windows",
         "patterns": ["active directory", "domain controller", "domain admin", "ntds.dit", "sysvol"],
     },
+    "Pass-the-Hash (PtH)": {
+        "category": "Active Directory",
+        "os": "windows",
+        "patterns": ["pass-the-hash", "pth", "-hashes :", "-hashes lm:nt", "-hashes :nt", "psexec.py", "wmiexec.py", "smbexec.py"],
+    },
 
     # ── Password Cracking & Credential Dumping ───────────────────────────────
     "Password Cracking & Hash Dumping": {
@@ -255,15 +268,29 @@ CANONICAL_TECHNIQUES: dict[str, dict[str, Any]] = {
             "hash dump", "dumping hashes", "ntds.dit", "sam dump", "cracking password",
         ],
     },
+    "Linux Credential Harvesting": {
+        "category": "Linux-Privesc",
+        "secondary_category": "Password Cracking",
+        "os": "linux",
+        "patterns": ["/etc/shadow", "id_rsa", "keepass", ".kdbx", "wp-config.php", ".bash_history"],
+    },
 
     # ── Specific Vulnerabilities & Web/Network Attacks ───────────────────────
     "SQL Injection with sqlmap": {
         "category": "Web",
-        "patterns": ["sqlmap", "sqli", "sql injection"],
+        "patterns": ["sqlmap"],
+    },
+    "Server-Side Template Injection (SSTI)": {
+        "category": "Web",
+        "patterns": ["ssti", "template injection", "jinja2", "render_template_string", "{{.*config.*}}"],
+    },
+    "Server-Side Request Forgery (SSRF)": {
+        "category": "Web",
+        "patterns": ["ssrf", "server-side request forgery", "169.254.169.254", "gopher://", "dict://"],
     },
     "CVE-2021-44228 Log4Shell": {
         "category": "Web",
-        "patterns": ["log4j", "log4shell", "cve-2021-44228", "jndi:ldap", "marshalsec"],
+        "patterns": ["log4shell", "cve-2021-44228", "jndi:ldap", "jndi:rmi", "jndiexploit", "marshalsec"],
     },
     "MS17-010 EternalBlue": {
         "category": "Network",
@@ -271,13 +298,80 @@ CANONICAL_TECHNIQUES: dict[str, dict[str, Any]] = {
     },
     "Samba Remote Code Execution": {
         "category": "Network",
-        "patterns": ["cve-2007-2447", "usermap_script", "sambacry", "cve-2017-7494"],
-        "fallback_patterns": ["samba", "smbd"],
-        "fallback_require": ["exploit", "rce", "remote code"],
+        "patterns": [
+            "cve-2007-2447",
+            "usermap_script",
+            "username map script",
+            "sambacry",
+            r"samba.*(?:printer|printing).*command injection",
+            "command injection in samba",
+            "samba remote code execution",
+            "samba rce",
+            "samba vulnerability",
+        ],
+        "fallback_patterns": ["samba", "smb"],
+        "fallback_require": ["remote code execution", "rce", "exploit", "command injection"],
+    },
+    "MSSQL xp_cmdshell Execution": {
+        "category": "Network",
+        "patterns": ["xp_cmdshell", "mssqlclient", "sp_configure.*xp_cmdshell"],
+    },
+    "Redis Remote Code Execution": {
+        "category": "Network",
+        "patterns": [
+            "redis-cli", "rogue-server", "config set dir.*ssh", "config set dbfilename",
+            "redis.*authorized_keys", "redis.*crontab",
+            "redis.*rce", "redis.*remote code execution", "redis server",
+        ],
+        "fallback_patterns": ["redis"],
+        "fallback_require": ["remote code execution", "rce", "exploit", "unauthenticated", "misconfigured"],
+    },
+    "Anonymous FTP Access": {
+        "category": "Network",
+        "patterns": ["anonymous ftp", "ftp.*anonymous allowed", "230 login successful.*anonymous", "anonymous access"],
     },
     "WinRM Shell Access": {
         "category": "Network",
-        "patterns": ["evil-winrm", "winrm", "5985", "5986"],
+        "patterns": ["evil-winrm", "winrm shell", "winrm session", "enter-pssession", "winrm.py"],
+    },
+    "Sudo LD_PRELOAD Privilege Escalation": {
+        "category": "Linux-Privesc",
+        "parent_technique": "Sudo Misconfiguration",
+        "os": "linux",
+        "patterns": ["ld_preload", "env_keep.*ld_preload", "env_keep += ld_preload"],
+    },
+    "Command Injection": {
+        "category": "Web",
+        "patterns": ["command injection", "shell injection", r"system\(", r"exec\(", "shell_exec"],
+    },
+    "Local File Inclusion (LFI)": {
+        "category": "Web",
+        "patterns": ["local file inclusion", "path traversal", "directory traversal", "/etc/passwd"],
+    },
+    "XML External Entity (XXE)": {
+        "category": "Web",
+        "patterns": ["xxe", "xml external entity", "system entity"],
+    },
+    "GPO Abuse": {
+        "category": "Active Directory",
+        "os": "windows",
+        "patterns": ["gpo abuse", "group policy object", "sharpgpoabuse"],
+    },
+    "NTLM Relay & Coercion": {
+        "category": "Active Directory",
+        "os": "windows",
+        "patterns": ["ntlm relay", "petitpotam", "printerbug", "mitm6", "responder"],
+    },
+    "Golden / Silver Ticket": {
+        "category": "Active Directory",
+        "secondary_category": "Kerberos",
+        "os": "windows",
+        "patterns": ["golden ticket", "silver ticket", "krbtgt", "ticketer.py"],
+    },
+    "Wildcard Injection": {
+        "category": "Linux-Privesc",
+        "os": "linux",
+        "patterns": ["wildcard injection", "tar.*--checkpoint"],
     },
 }
 
@@ -305,7 +399,7 @@ TOOL_CATEGORIES: dict[str, str] = {
 
 KNOWN_CVE_ALIASES: dict[str, list[str]] = {
     "CVE-2017-0143": ["ms17-010", "eternalblue", "smb-vuln-ms17-010"],
-    "CVE-2021-44228": ["log4shell", "log4j", "jndi:ldap", "marshalsec"],
+    "CVE-2021-44228": ["log4shell", "cve-2021-44228", "jndi:ldap", "marshalsec"],
     "CVE-2007-2447": ["usermap_script", "samba rce", "sambacry"],
     "CVE-2017-7494": ["sambacry", "samba rce"],
     "CVE-2021-4034": ["pwnkit"],
@@ -315,28 +409,28 @@ KNOWN_CVE_ALIASES: dict[str, list[str]] = {
 }
 
 KNOWN_TOOL_ALIASES: dict[str, list[str]] = {
-    "printspoofer": ["seimpersonate", "spoolss"],
-    "juicypotato": ["seimpersonate", "clsid", "potato"],
-    "godpotato": ["seimpersonate", "potato"],
-    "sweetpotato": ["seimpersonate", "potato"],
-    "roguepotato": ["seimpersonate", "potato"],
-    "certipy": ["adcs", "esc1", "esc8", "esc9", "certificate template"],
-    "certify": ["adcs", "certificate template"],
-    "rubeus": ["kerberos", "kerberoast", "as-rep", "tgt", "tgs"],
-    "getnpusers": ["as-rep", "asrep", "roasting", "dont_req_preauth"],
-    "getuserspns": ["kerberoast", "kerberoasting", "spn"],
-    "secretsdump": ["dcsync", "ntds.dit", "hash dump", "sam dump"],
-    "mimikatz": ["sekurlsa", "logonpasswords", "hash dump", "lsass"],
-    "evil-winrm": ["winrm", "remote management users", "5985", "5986"],
-    "sqlmap": ["sqli", "sql injection", "--os-shell"],
-    "sharphound": ["bloodhound", "attack path"],
-    "bloodhound": ["sharphound", "attack path"],
-    "hashcat": ["password cracking", "hash dump"],
-    "john": ["john the ripper", "password cracking"],
-    "pywhisker": ["shadow credential", "msds-keycredentiallink"],
-    "whisker": ["shadow credential", "msds-keycredentiallink"],
-    "linpeas": ["privilege escalation", "privesc"],
-    "winpeas": ["privilege escalation", "privesc"],
+    "printspoofer": ["printspoofer.exe", "printspoofer64.exe"],
+    "juicypotato": ["juicypotato.exe"],
+    "godpotato": ["godpotato.exe"],
+    "sweetpotato": ["sweetpotato.exe"],
+    "roguepotato": ["roguepotato.exe"],
+    "certipy": ["certipy-ad"],
+    "certify": ["certify.exe"],
+    "rubeus": ["rubeus.exe"],
+    "getnpusers": ["getnpusers.py"],
+    "getuserspns": ["getuserspns.py"],
+    "secretsdump": ["secretsdump.py"],
+    "mimikatz": ["mimikatz.exe", "sekurlsa"],
+    "evil-winrm": ["evilwinrm"],
+    "sqlmap": ["sqlmap.py", "--os-shell"],
+    "sharphound": ["sharphound.exe", "sharphound.ps1"],
+    "bloodhound": ["bloodhound-python"],
+    "hashcat": ["hashcat.exe"],
+    "john": ["john the ripper"],
+    "pywhisker": ["pywhisker.py"],
+    "whisker": ["whisker.py"],
+    "linpeas": ["linpeas.sh"],
+    "winpeas": ["winpeas.exe", "winpeas.bat"],
 }
 
 # ── Technique heading keywords (for raw heading extraction) ─────────────────
@@ -360,6 +454,30 @@ def _as_list(value: Any) -> list[str]:
     if isinstance(value, str) and value.strip():
         return [v.strip() for v in value.split(",") if v.strip()]
     return []
+
+
+def _match_pattern(pat: str, text: str) -> bool:
+    """Match pattern against text using regex if meta-characters exist, else word-bounded regex.
+
+    Filters out false-positive hits where a vulnerability identifier is merely a listed Nmap
+    script filename (.nse) in reconnaissance output without actual exploitation context.
+    """
+    try:
+        if any(c in pat for c in (".*", "+", "[", "]", "(", ")", r"\b", "?", "|", "$", "^")):
+            m = re.search(pat, text, re.IGNORECASE)
+        else:
+            m = re.search(r"\b" + re.escape(pat) + r"\b", text, re.IGNORECASE)
+    except re.error:
+        m = re.search(r"\b" + re.escape(pat) + r"\b", text, re.IGNORECASE)
+
+    if not m:
+        return False
+
+    matched_str = m.group(0).lower()
+    if f"{matched_str}.nse" in text and f" {matched_str} " not in f" {text} ":
+        return False
+    return True
+
 
 
 def _is_technique(heading: str) -> bool:
@@ -454,6 +572,21 @@ def build_graph(all_chunks: list[dict[str, Any]]) -> nx.DiGraph:
         for cve in cves:
             cve_up = cve.upper()
             cve_aliases = KNOWN_CVE_ALIASES.get(cve_up, [])
+
+            # Verify CVE or valid alias actually exists in this chunk text/context
+            # to prevent stale/over-tagged metadata from creating spurious exploits edges
+            cve_matches = [cve_up.lower()] + [a.lower() for a in cve_aliases]
+            matched_cve = False
+            for cm in cve_matches:
+                if cm in search_ctx:
+                    # check if it's not merely an .nse script listing
+                    if f"{cm}.nse" in search_ctx and f" {cm} " not in f" {search_ctx} ":
+                        continue
+                    matched_cve = True
+                    break
+            if not matched_cve:
+                continue
+
             if cve_up not in G:
                 G.add_node(cve_up, type="cve", aliases=cve_aliases)
             else:
@@ -490,18 +623,16 @@ def build_graph(all_chunks: list[dict[str, Any]]) -> nx.DiGraph:
             if req_os and os_val != req_os:
                 continue
 
+            excl_os = tech_cfg.get("exclude_os")
+            if excl_os and os_val == excl_os:
+                continue
+
             req_phase = tech_cfg.get("require_phase")
             if req_phase and phase != req_phase and req_phase not in bc_lower:
                 continue
 
             patterns = tech_cfg.get("patterns", [])
-            hit = any(pat in search_ctx for pat in patterns)
-
-            # Fallback pattern check (e.g. for Samba RCE)
-            if not hit and "fallback_patterns" in tech_cfg:
-                has_fallback = any(fb in search_ctx for fb in tech_cfg["fallback_patterns"])
-                has_req = any(rq in search_ctx for rq in tech_cfg.get("fallback_require", []))
-                hit = has_fallback and has_req
+            hit = any(_match_pattern(pat, search_ctx) for pat in patterns)
 
             if hit:
                 tech_patterns = tech_cfg.get("patterns", [])

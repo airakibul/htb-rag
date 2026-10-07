@@ -64,10 +64,10 @@ def compress_context_chunk(text: str, max_chars: int = _MAX_CHUNK_CHARS) -> str:
     if not text:
         return ""
 
-    # Strip long hex dumps (> 40 hex chars)
+    # Strip long hex dumps (> 40 chars) while preserving MD5/NTLM (32 chars) hashes
     compressed = re.sub(r"\b[0-9a-fA-F]{40,}\b", "[hex data omitted]", text)
-    # Strip long base64 strings (> 50 chars)
-    compressed = re.sub(r"[A-Za-z0-9+/=]{50,}", "[base64 omitted]", compressed)
+    # Strip standalone long base64 strings (>= 60 chars) without corrupting short tokens or flags
+    compressed = re.sub(r"\b[A-Za-z0-9+/=]{60,}\b", "[base64 omitted]", compressed)
     # Collapse repetitive terminal dividers (e.g. ------ or ======)
     compressed = re.sub(r"[-=~_*]{5,}", "-----", compressed)
     # Collapse multiple blank lines
@@ -153,14 +153,14 @@ def format_context(retrieval_result: dict[str, Any] | RetrievalResult) -> str:
         manifest_lines = ["=== Complete Machine Manifest (Graph-Verified) ==="]
         manifest_lines.append("| Machine | OS | Techniques |")
         manifest_lines.append("|---------|-----|-----------|")
-        for entry in manifest[:200]:  # Cap at 200 to prevent overflow
+        for entry in manifest[:40]:  # Cap at 40 to prevent token bloat and LLM rate limits
             techs = ", ".join(entry.get("techniques", [])[:3])
             manifest_lines.append(f"| {entry['machine']} | {entry.get('os', '?')} | {techs} |")
         manifest_lines.append("===\n")
         manifest_block = "\n".join(manifest_lines)
 
         # Only include if within context budget
-        if used + len(manifest_block) < _MAX_CONTEXT_CHARS + 4000:  # Allow extra budget for manifest
+        if used + len(manifest_block) < _MAX_CONTEXT_CHARS:
             parts.append(manifest_block)
             used += len(manifest_block)
 
@@ -227,13 +227,15 @@ class Synthesizer:
 
         logger.info(f"Synthesized answer using provider: {provider_name}")
 
-        # ── Collect unique sources cited ─────────────────────────────────────
+        # ── Collect genuine sources cited / used ──────────────────────────────
+        # Sources from retrieved chunks provided to the LLM (zero fake manifest sources)
         chunks = retrieval_result.get("chunks", [])
-        sources = sorted({
-            c.get("metadata", {}).get("source", "")
+        chunk_sources = {
+            c.get("metadata", {}).get("source", "").lower()
             for c in chunks
             if c.get("metadata", {}).get("source")
-        })
+        }
+        sources = sorted(s for s in chunk_sources if s)
 
         # ── Graph usage flag ─────────────────────────────────────────────────
         graph = retrieval_result.get("graph", {})

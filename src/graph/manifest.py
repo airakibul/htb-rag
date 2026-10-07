@@ -8,6 +8,7 @@ to inject into LLM context, boosting recall without context overflow.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import networkx as nx
@@ -184,12 +185,7 @@ def generate_manifest_for_query(
     matched_categories = list(hits.get("matched_categories", []))
     matched_techniques = list(hits.get("matched_techniques", []))
 
-    # If both ADCS and broad Active Directory are matched, prioritize specific ADCS if query mentions cert/adcs
     low = query.lower()
-    if "ADCS" in matched_categories and "Active Directory" in matched_categories:
-        if any(w in low for w in ["adcs", "cert", "template", "esc"]):
-            matched_categories = [c for c in matched_categories if c != "Active Directory"]
-
     # Target OS resolution
     target_os = os_filter
     if not target_os:
@@ -202,38 +198,26 @@ def generate_manifest_for_query(
 
     combined: dict[str, dict[str, Any]] = {}
 
-    if matched_categories:
-        for cat in matched_categories:
-            for entry in generate_machine_manifest(graph, cat):
-                m = entry["machine"]
-                if target_os and entry.get("os") not in (target_os, "unknown"):
-                    continue
-                if m not in combined:
-                    combined[m] = {
-                        "machine": m,
-                        "os": entry["os"],
-                        "difficulty": entry["difficulty"],
-                        "techniques": set(entry["techniques"]),
-                    }
-                else:
-                    combined[m]["techniques"].update(entry["techniques"])
-    else:
-        for tech in matched_techniques:
-            if str(tech).lower().strip() in GENERIC_TECHNIQUES:
+    specific_techniques = [
+        t for t in matched_techniques
+        if str(t).lower().strip() not in GENERIC_TECHNIQUES
+    ]
+    target_entities = specific_techniques if specific_techniques else matched_categories
+
+    for entity in target_entities:
+        for entry in generate_machine_manifest(graph, entity):
+            m = entry["machine"]
+            if target_os and entry.get("os") not in (target_os, "unknown"):
                 continue
-            for entry in generate_machine_manifest(graph, tech):
-                m = entry["machine"]
-                if target_os and entry.get("os") not in (target_os, "unknown"):
-                    continue
-                if m not in combined:
-                    combined[m] = {
-                        "machine": m,
-                        "os": entry["os"],
-                        "difficulty": entry["difficulty"],
-                        "techniques": set(entry["techniques"]),
-                    }
-                else:
-                    combined[m]["techniques"].update(entry["techniques"])
+            if m not in combined:
+                combined[m] = {
+                    "machine": m,
+                    "os": entry["os"],
+                    "difficulty": entry["difficulty"],
+                    "techniques": set(entry["techniques"]),
+                }
+            else:
+                combined[m]["techniques"].update(entry["techniques"])
 
     return [
         {
@@ -291,11 +275,15 @@ def get_technique_manifest_for_query(
 ) -> list[dict[str, Any]]:
     """Extract targeted techniques, tools, or CVEs for a query and generate a clean manifest."""
     hits = query_graph(graph, query)
-    matched_tools = list(hits.get("matched_tools", []))
+    matched_tools = [
+        t for t in hits.get("matched_tools", [])
+        if str(t).lower().strip() not in {"impacket", "metasploit", "powershell", "bash", "python"}
+    ]
     matched_cves = list(hits.get("matched_cves", []))
     matched_techs = [
         t for t in hits.get("matched_techniques", [])
         if str(t).lower().strip() not in GENERIC_TECHNIQUES
     ]
-    targets = matched_tools + matched_cves + matched_techs
+    # If specific techniques or CVEs are matched, prioritize them over tool suites
+    targets = (matched_cves + matched_techs) if (matched_cves or matched_techs) else matched_tools
     return generate_technique_manifest(graph, targets, os_filter=os_filter)
