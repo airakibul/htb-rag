@@ -56,6 +56,7 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "password cracking", "hash dumping", "hashcat", "john the ripper",
         "john", "secretsdump", "mimikatz", "hash dump", "dumping hashes",
         "ntds.dit", "sam dump", "cracking password", "hash",
+        "credential harvesting", "credential discovery", "credentials",
     ],
     "Container Escape": [
         "docker", "docker.sock", "container", "escape", "breakout",
@@ -82,6 +83,7 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
     "Network": [
         "smb", "samba", "ftp", "snmp", "rdp", "winrm", "evil-winrm",
         "ms17-010", "eternalblue", "sambacry", "cve-2007-2447",
+        "service enumeration", "reconnaissance", "network enumeration", "recon",
     ],
 }
 

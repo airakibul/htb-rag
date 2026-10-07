@@ -278,8 +278,8 @@ class HybridRetriever:
         )
 
         if is_broad:
-            effective_top_k = max(top_k, 25)
-            candidate_pool = 100
+            effective_top_k = top_k or 8
+            candidate_pool = 80
         elif multi_target:
             effective_top_k = max(top_k, 14)
             candidate_pool = 60

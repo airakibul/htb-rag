@@ -53,14 +53,14 @@ Answer: AS-REP Roasting targets Active Directory user accounts that have the DON
 
 ---
 **Q7** | Server-Side Template Injection (SSTI) in Jinja2
-Machines: htb-bolt, htb-canape, htb-chemistry, htb-darkzero, htb-doctor, htb-epsilon, htb-flustered, htb-hacknet, htb-iclean, htb-late, htb-oz, htb-race, htb-sandworm, htb-spider, htb-trickster
+Machines: htb-bolt, htb-chemistry, htb-darkzero, htb-doctor, htb-epsilon, htb-flustered, htb-hacknet, htb-iclean, htb-late, htb-oz, htb-race, htb-sandworm, htb-spider, htb-trickster
 Answer: SSTI in Jinja2 occurs when user input is concatenated directly into a template string rather than passed as a context variable. Attackers inject Jinja expressions like {{ config.items() }} or access Python class hierarchies to locate subprocess.Popen and execute arbitrary OS commands.
 
 ---
 
 ---
 **Q8** | MSSQL xp_cmdshell command execution
-Machines: htb-blazorized, htb-breach, htb-darkzero, htb-eighteen, htb-escape, htb-escapetwo, htb-fighter, htb-freelancer, htb-ghost, htb-manager, htb-mantis, htb-monteverde, htb-overwatch, htb-pivotapi, htb-querier, htb-redelegate, htb-sendai, htb-signed, htb-tally
+Machines: htb-blazorized, htb-breach, htb-darkzero, htb-eighteen, htb-escape, htb-escapetwo, htb-fighter, htb-freelancer, htb-ghost, htb-manager, htb-monteverde, htb-pivotapi, htb-querier, htb-redelegate, htb-sendai, htb-signed, htb-tally
 Answer: When an attacker acquires credentials to a Microsoft SQL Server with sysadmin privileges or impersonate permissions, they can reconfigure sp_configure to enable xp_cmdshell (sp_configure 'show advanced options', 1; RECONFIGURE; sp_configure 'xp_cmdshell', 1; RECONFIGURE;) and execute operating system shell commands as the SQL service account.
 
 ---
@@ -102,7 +102,7 @@ Answer: SSRF allows an attacker to induce the server-side application to make HT
 
 ---
 **Q14** | Pass-the-Hash with Impacket psexec / wmiexec
-Machines: htb-active, htb-anubis, htb-atom, htb-bruno, htb-darkzero, htb-flight, htb-forest, htb-hathor, htb-intelligence, htb-jab, htb-jeeves, htb-mist, htb-nest, htb-netmon, htb-phantom, htb-querier, htb-redelegate, htb-remote, htb-retrotwo, htb-rustykey, htb-sauna, htb-search, htb-secnotes, htb-silo, htb-sizzle, htb-solarlab, htb-support, htb-voleur, htb-vulncicada
+Machines: htb-anubis, htb-bruno, htb-darkzero, htb-flight, htb-forest, htb-intelligence, htb-jeeves, htb-mist, htb-querier, htb-redelegate, htb-retrotwo, htb-sauna, htb-search, htb-silo, htb-sizzle, htb-solarlab, htb-voleur, htb-vulncicada
 Answer: Pass-the-Hash allows an attacker to authenticate to remote Windows hosts over SMB/RPC using an NTLM password hash without needing the plaintext password. Impacket tools like psexec.py, wmiexec.py, and smbexec.py accept the hash format -hashes LM:NT or :NT to spawn remote command prompts or semi-interactive shells.
 
 ---

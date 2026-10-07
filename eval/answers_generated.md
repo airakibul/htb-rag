@@ -73,20 +73,28 @@ Insufficient data or LLM rate limit reached to generate the answer.
 ## MS17-010 (EternalBlue) Overview
 
 **Definition:**
-MS-17-010, also known as **EternalBlue**, is an unauthenticated remote code execution vulnerability in Windows SMB. It was famously leaked by the Shadow Brokers and utilized in the WannaCry ransomware attack in May 2017. (seen on: htb-blue, htb-legacy)
+MS17-010, also known as ETERNALBLUE, is an unauthenticated remote code execution vulnerability in Windows SMB. It was famously leaked by the Shadow Brokers and was the driver behind the WannaCry worm in May 2017. (seen on: htb-blue)
 
 **Exploitation Notes:**
-*   **Metasploit:** The Metasploit exploits for MS17-010 are considered much more stable than Python script counterparts. Metasploit is strongly recommended for real-world scenarios. (seen on: htb-blue)
-*   **Python Scripts:** If Metasploit is not allowed (e.g., OSCP training), Python scripts can be used, but the downside is that they may crash a few boxes. (seen on: htb-blue)
+*   **Metasploit:** The Metasploit exploits for MS17-010 are considered much more stable than Python script counterparts and are strongly recommended for real-world scenarios. (seen on: htb-blue)
+*   **Python Scripts:** For training activities that do not allow Metasploit (e.g., OSCP), Python scripts are an alternative, though they may cause system crashes. (seen on: htb-blue)
+*   **Legacy Systems:** For older systems like Windows XP, specific forks of the MS17-010 repository (such as helviojunior's fork) provide scripts like `send_and_execute.py` that can upload and execute payloads. (seen on: htb-legacy)
 
-## HTB Machines Demonstrating Exploitation
+## Demonstrated Exploitation on HTB Machines
 
-*   **htb-blue**
-    *   **Phase:** Privilege Escalation (Shell as System)
-    *   **Context:** Used to escalate privileges to System. (seen on: htb-blue)
-*   **htb-legacy**
-    *   **Phase:** Recon (SMB Vulnerabilities)
-    *   **Context:** Identified as vulnerable to MS-17-010 during SMB reconnaissance, alongside MS-08-067. (seen on: htb-legacy)
+### Foothold
+*   **Machine:** htb-blue
+*   **Technique:** Unauthenticated RCE via SMB.
+*   **Context:** Used to gain a system shell. (seen on: htb-blue)
+
+### Privilege Escalation
+*   **Machine:** htb-legacy
+*   **Technique:** Exploitation of MS17-010 on Windows XP.
+*   **Command:**
+    ```bash
+    wget https://raw.githubusercontent.com/helviojunior/MS17-010/master/send_and_execute.py
+    ```
+*   **Context:** Used to locate and execute exploits for system shell access. (seen on: htb-legacy)
 
 ---
 

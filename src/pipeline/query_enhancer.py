@@ -24,17 +24,31 @@ def _fallback_enhance(query: str, graph: nx.DiGraph | None = None) -> EnhancedQu
     """Clean, un-overfitted query intent parsing."""
     low = query.lower()
 
-    # Scope detection: broad cheatsheet/catalog vs specific technique/exploit
-    has_broad_intent = any(
-        w in low for w in ["cheatsheet", "cheat sheet", "overview", "attack techniques", "techniques across"]
-    )
-    has_cve = bool(re.search(r"cve-\d{4}-\d+", low)) or bool(re.search(r"\bms\d{2}-\d{3}\b", low))
-    has_specific_how = any(p in low for p in ["how does", "how is", "how was", "which htb", "which machines"])
-
-    if has_broad_intent and not has_cve and not has_specific_how:
-        query_scope = "broad"
-    else:
+    # 1. Definite Specific Anchors (Exact vulnerability / exploit identifiers)
+    has_cve = bool(re.search(r"\bcve-\d{4}-\d+\b", low)) or bool(re.search(r"\bms\d{2}-\d{3}\b", low))
+    if has_cve:
         query_scope = "specific"
+    else:
+        # 2. Definite Specific Procedural Anchors (How does a single mechanism/tool work)
+        is_procedural = bool(re.search(r"\bhow\s+(?:does|is|was|were|to)\b", low))
+        is_definition = bool(re.search(r"\bwhat\s+is\s+[a-z0-9\-]+\s*\([^\)]+\)", low))
+
+        if is_procedural or is_definition:
+            query_scope = "specific"
+        else:
+            # 3. Broad Semantic Indicators (Cheatsheet / Catalog / Domain Collection)
+            has_cs = bool(re.search(r"\b(?:cheat\s*sheet|overview|catalog|handbook)\b", low))
+            has_tech_domain = bool(re.search(
+                r"\b(?:attack|abuse|privesc|privilege\s+escalation|cracking|dumping|injection|recon(?:naissance)?|lateral\s+movement)\s+(?:techniques|vulnerabilities|methods|vectors|attacks)\b",
+                low,
+            ))
+            plural_entities = bool(re.search(r"\b(?:techniques|vulnerabilities|attacks|methods|vectors|exploits|flaws)\b", low))
+            cross_corpus = bool(re.search(r"\b(?:across|common|all\s+machines|various|different|types\s+of|list\s+of|shown\s+across|used\s+across|seen\s+across)\b", low))
+
+            if has_cs or has_tech_domain or (plural_entities and cross_corpus):
+                query_scope = "broad"
+            else:
+                query_scope = "specific"
 
     # Explicit phase detection
     target_phase = None

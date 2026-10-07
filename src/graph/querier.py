@@ -102,7 +102,7 @@ def query_graph(
         node for node, data in graph.nodes(data=True)
         if data.get("type") == "category" and (
             _match_category_kw(node, low)
-            or any(_match_category_kw(kw, low) for kw in data.get("aliases", CATEGORY_KEYWORDS.get(node, [])))
+            or any(_match_category_kw(kw, low) for kw in (set(data.get("aliases", [])) | set(CATEGORY_KEYWORDS.get(node, []))))
         )
     })
     # Filter out opposite OS category if an explicit OS is mentioned

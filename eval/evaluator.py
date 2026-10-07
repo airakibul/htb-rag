@@ -29,6 +29,10 @@ import requests
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 EVAL_DIR      = Path(__file__).resolve().parent
+PROJECT_ROOT  = EVAL_DIR.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 ANSWER_KEY    = EVAL_DIR / "answer_key.md"
 TEST_QS       = EVAL_DIR / "test_questions.md"
 RESULTS_OUT   = EVAL_DIR / "results.md"
@@ -181,12 +185,19 @@ def main() -> None:
     print(f"📝 Evaluating {len(q_nums)} question(s) [dataset: {args.dataset}]…\n")
 
     # ── Check API health ─────────────────────────────────────────────────
+    api_online = False
+    in_process_retriever = None
+    in_process_synthesizer = None
     try:
-        h = requests.get(f"{API_BASE}/health", timeout=5).json()
+        h = requests.get(f"{API_BASE}/health", timeout=3).json()
+        api_online = True
         print(f"✅ API online — {h.get('chunks_indexed', '?')} chunks indexed\n")
     except Exception:
-        print("❌ Cannot reach API at localhost:8000. Is it running?")
-        sys.exit(1)
+        print("ℹ️ API offline at localhost:8000 — initializing resilient in-process pipeline…\n")
+        from src.pipeline.retriever import HybridRetriever
+        from src.pipeline.synthesizer import Synthesizer
+        in_process_retriever = HybridRetriever()
+        in_process_synthesizer = Synthesizer()
 
     # ── Evaluate each question ───────────────────────────────────────────
     rows: list[dict[str, Any]] = []
@@ -201,8 +212,17 @@ def main() -> None:
         print(f"  Q{qnum}: {title}…", end=" ", flush=True)
 
         # ── Retrieve ─────────────────────────────────────────────────
+        raw_res = None
         try:
-            retrieval = _api_retrieve(q_text)
+            if api_online:
+                retrieval = _api_retrieve(q_text)
+            else:
+                raw_res = in_process_retriever.retrieve(q_text)
+                retrieval = {
+                    "chunks": [c.to_dict() if hasattr(c, "to_dict") else c for c in raw_res.chunks],
+                    "manifest": raw_res.manifest,
+                    "graph": raw_res.graph_hits,
+                }
         except Exception as exc:
             print(f"⚠️ retrieve failed: {exc}")
             rows.append({
@@ -238,8 +258,12 @@ def main() -> None:
 
         # ── Synthesize ───────────────────────────────────────────────
         try:
-            synth = _api_query(q_text)
-            answer = synth.get("answer", "")
+            if api_online:
+                synth = _api_query(q_text)
+                answer = synth.get("answer", "")
+            else:
+                synth = in_process_synthesizer.synthesize(q_text, raw_res)
+                answer = synth.get("answer", "")
         except Exception as exc:
             answer = f"(synthesis failed: {exc})"
 

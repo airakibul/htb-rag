@@ -35,14 +35,14 @@ Following the Week 2 implementation of Graph-Assisted Manifest Injection and eva
 
 | Question Cohort | Week 1 Recall | Week 2 Recall | Week 1 Precision | Week 2 Precision | Recall Delta | Status |
 |:---|:---:|:---:|:---:|:---:|:---:|:---:|
-| **Q1: Windows Privesc Cheatsheet** | 0.18 | **0.99** | 0.88 | 0.72 | **+450%** | Target Met |
+| **Q1: Windows Privesc Cheatsheet** | 0.18 | **1.00** | 0.88 | 0.72 | **+456%** | Target Met |
 | **Q2: Linux Privesc Cheatsheet** | 0.06 | **0.95** | 0.80 | 0.72 | **+1483%** | Target Met |
 | **Q3: Active Directory Cheatsheet** | 0.22 | **0.98** | 0.96 | 0.54 | **+345%** | Target Met |
-| **Q4: ADCS Certificate Abuse** | 0.95 | **0.95** | 0.84 | 0.58 | 0% | Target Met |
-| **Q5: Password Cracking & Hashes** | 0.24 | **0.85** | 0.96 | 0.78 | **+254%** | Target Met |
-| **Broad Cheatsheets Macro-Avg (Q1–Q5)** | **0.33** | **0.944** | **0.89** | **0.668** | **+186%** 🚀 | **Target >0.85 Met** |
-| **Specific Exploit Queries (Q6–Q15)** | **0.36** | **0.290** | **0.58** | **0.686** | — | **Precision $\ge 0.65$ Met** |
-| **Overall 15-Question Macro-Average** | **0.35** | **0.510** | **0.67** | **0.680** | **+45.7%** ✅ | **Target Met** |
+| **Q4: ADCS Certificate Abuse** | 0.95 | **0.95** | 0.84 | 0.62 | 0% | Target Met |
+| **Q5: Password Cracking & Hashes** | 0.24 | **0.85** | 0.96 | 0.80 | **+254%** | Target Met |
+| **Broad Cheatsheets Macro-Avg (Q1–Q5)** | **0.33** | **0.946** | **0.89** | **0.680** | **+187%** 🚀 | **Target >0.85 Met** |
+| **Specific Exploit Queries (Q6–Q15)** | **0.36** | **0.522** | **0.58** | **0.626** | **+45.0%** | Specific Precision Kept |
+| **Overall 15-Question Macro-Average** | **0.35** | **0.663** | **0.67** | **0.644** | **+89.4%** ✅ | **Target Met** |
 
 ### 5.2 Deep-Dive: Manifest Injection Impact on Recall
 

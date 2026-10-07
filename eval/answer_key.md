@@ -90,11 +90,8 @@ Answer: Windows service accounts (such as IIS APPPOOL or LOCAL SERVICE) often po
 Machines: htb-administrator, htb-blazorized, htb-darkcorp, htb-delegate, htb-forest, htb-ghost, htb-hathor, htb-mirage, htb-mist, htb-phantom, htb-retrotwo, htb-rustykey, htb-sauna, htb-scepter, htb-signed, htb-sizzle, htb-university, htb-vintage
 Answer: DCSync mimics the behavior of an Active Directory Domain Controller using the Directory Replication Service (DRS) Remote Protocol (MS-DRSR). By requesting replication of user objects via GetNCChanges, an attacker with replication permissions (DS-Replication-Get-Changes and DS-Replication-Get-Changes-All) can dump the password hashes of any domain account—including the krbtgt account and Domain Admins—from NTDS.dit without running code on the DC itself. Executed using Impacket's secretsdump.py -just-dc or Mimikatz lsadump::dcsync.
 
----
-
----
-**Q13** | SUID binaries and GTFOBins Linux privesc
-Machines: htb-academy, htb-awkward, htb-chaos, htb-conversor, htb-cozyhosting, htb-devvortex, htb-dump, htb-earlyaccess, htb-facts, htb-flujab, htb-jail, htb-jarvis, htb-jewel, htb-joker, htb-knife, htb-luanne, htb-mango, htb-meta, htb-monitorstwo, htb-nunchucks, htb-openadmin, htb-paper, htb-schooled, htb-shoppy, htb-sunday, htb-traverxec, htb-unrested, htb-updown, htb-writer, htb-zero
+---**Q13** | SUID binaries and GTFOBins Linux privesc
+Machines: htb-academy, htb-altered, htb-awkward, htb-bank, htb-chaos, htb-charon, htb-conversor, htb-cozyhosting, htb-devvortex, htb-dump, htb-earlyaccess, htb-facts, htb-flujab, htb-jail, htb-jarvis, htb-jewel, htb-joker, htb-knife, htb-luanne, htb-magic, htb-mango, htb-meta, htb-monitorstwo, htb-nunchucks, htb-openadmin, htb-paper, htb-schooled, htb-shoppy, htb-sunday, htb-traverxec, htb-unrested, htb-updown, htb-writer, htb-zero
 Answer: SUID (Set Owner User ID up on execution) binaries run with the permissions of the file owner (typically root). Attackers enumerate them via find / -perm -4000 -type f 2>/dev/null. If a binary is misconfigured, vulnerable, or listed on GTFOBins (such as bash, nmap, vim, python, find, cp, systemctl, or custom SUID binaries), attackers exploit built-in functionality (e.g. shell escapes, arbitrary file read/write, shared library loading) to escalate privileges to root.
 
 ---
@@ -108,8 +105,8 @@ Answer: Evil-WinRM is used for remote PowerShell shell access over WinRM (port 5
 
 ---
 **Q15** | Samba RCE
-Machines: htb-abducted, htb-bamboo, htb-brainfuck, htb-calamity, htb-falafel, htb-frolic, htb-gofer, htb-jail, htb-kotarak, htb-lame, htb-lazy, htb-node, htb-overgraph, htb-puppy, htb-ropetwo, htb-sekhmet, htb-smasher2, htb-sneaky, htb-sniper, htb-tenten, htb-traceback, htb-writer, htb-ypuffy, htb-zetta, htb-zipper
-Answer: Samba RCE exploits include CVE-2007-2447 (Samba 3.0.20 username map script command injection, exploited on Lame via Metasploit), CVE-2017-7494 (SambaCry - writable share to load malicious shared library), and misconfigured SMB shares allowing credential theft or file upload for code execution.
+Machines: htb-abducted, htb-lame
+Answer: Samba RCE exploits include CVE-2007-2447 (Samba 3.0.20 username map script command injection, exploited on Lame via Metasploit) and Samba printer command injection (exploited on Abducted).
 
 ---
 

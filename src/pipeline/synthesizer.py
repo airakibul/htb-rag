@@ -38,9 +38,8 @@ Rules:
 3. For cheatsheet questions, group by attack phase:
    Recon → Foothold → Lateral Movement → Privilege Escalation
 4. For broad cheatsheet queries, if a "Complete Machine Manifest" table is provided:
-   - Generate detailed exploit steps from the chunk excerpts (cite machines).
-   - After the detailed section, add a "## Also Demonstrated On" section that lists
-     ALL machines from the manifest not already cited in detail, grouped by technique.
+   - Generate detailed exploit steps and commands from the retrieved chunk excerpts (cite machines).
+   - Then synthesize comprehensive corpus coverage from the manifest table in an "## Also Demonstrated On" section.
    - Format: "Also demonstrated on: MachineA, MachineB, MachineC (technique-name)"
    - This ensures comprehensive corpus coverage in the final answer.
 5. If context lacks sufficient info, say:
