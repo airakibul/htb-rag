@@ -1,6 +1,14 @@
-# HTB Cheatsheet Assistant — Test Set & Hand-Derived Answer Key
+# HTB Cheatsheet Assistant — Comprehensive Hand-Derived Technical Reference Catalog
 
-> **Evaluation Benchmark:** 15 Hand-Curated Questions (5 Broad Cheatsheet Questions, 10 Specific Mechanistic & Target Questions) with Ground-Truth Answers and Machine Attribution derived independently from the raw corpus.
+> **Corpus Reference & Derivation Archive:**  
+> This document serves as the **exhaustive, hand-derived technical catalog and corpus-wide derivation archive** across all 462 writeups (`raw/*.md`). It details exact regular expression commands, deep offensive mechanisms, prerequisite CLI syntax, and full-corpus machine inventories.
+>
+> 📌 **Automated Evaluation Benchmarks:**  
+> For the calibrated evaluation benchmarks utilized by the automated test harness (`eval/evaluator.py`), please refer to:
+> - **Dataset V1 (Calibrated Canonical Benchmark):** [eval/answer_key.md](eval/answer_key.md)
+> - **Dataset V2 (Independent Unseen Generalization Benchmark):** [eval/answer_key_v2.md](eval/answer_key_v2.md)
+> - **Raw Uncurated Grep Baselines:** [eval/answer_key_raw_grep.md](eval/answer_key_raw_grep.md) and [eval/answer_key_v2_raw_grep.md](eval/answer_key_v2_raw_grep.md)
+> - **Version 2.0 Upgrade Manifest:** [version-2.md](version-2.md)
 
 ---
 
