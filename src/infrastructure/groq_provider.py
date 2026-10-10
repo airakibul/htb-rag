@@ -68,6 +68,7 @@ class GroqProvider(LLMProvider):
         self.api_key = api_key or GROQ_API_KEY
         self.model = model or GROQ_MODEL
         self.timeout = timeout
+        self._cooldown_until: float = 0.0
 
     def generate(
         self,
@@ -78,10 +79,17 @@ class GroqProvider(LLMProvider):
     ) -> str | None:
         if not self.api_key:
             return None
+
+        import time
+
+        if time.time() < self._cooldown_until:
+            logger.info("Groq is in cooldown due to rate limit; skipping directly to fallback provider.")
+            return None
+
         try:
             from groq import Groq
 
-            client: Any = Groq(api_key=self.api_key, timeout=self.timeout, max_retries=3)
+            client: Any = Groq(api_key=self.api_key, timeout=self.timeout, max_retries=0)
             logger.info(f"Synthesizing answer via Groq ({self.model})...")
             messages: Any = [
                 {"role": "system", "content": system_prompt},
@@ -101,7 +109,14 @@ class GroqProvider(LLMProvider):
                 if cleaned:
                     return cleaned
         except Exception as exc:
-            logger.warning(
-                f"Groq generation failed, falling back to Gemini/OpenRouter: {exc}"
-            )
+            err_msg = str(exc).lower()
+            if "429" in err_msg or "rate limit" in err_msg or "tokens per day" in err_msg:
+                self._cooldown_until = time.time() + 120.0
+                logger.warning(
+                    f"Groq rate limit exceeded ({exc}). Cooldown activated for 120s, falling back immediately."
+                )
+            else:
+                logger.warning(
+                    f"Groq generation failed, falling back to Gemini/OpenRouter: {exc}"
+                )
         return None

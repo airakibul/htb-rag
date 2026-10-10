@@ -1,8 +1,10 @@
 """
 retriever.py – Hybrid retrieval: BM25 + VectorStore + GraphStore + Cross-Encoder Reranker.
 
-Follows SOLID Dependency Inversion principle by injecting VectorStore, GraphStore,
-EmbeddingService, and Reranker interfaces.
+Follows SOLID Principles (SRP, OCP, DIP) and Clean Architecture:
+- Single Responsibility: Extracted BM25SearchIndex, RankFusionEngine, and ResultDiversifier.
+- Dependency Inversion: Depends on Domain interfaces (VectorStore, GraphStore, etc.)
+  with lazy fallback adapter creation, eliminating tight module-level coupling.
 """
 
 from __future__ import annotations
@@ -18,14 +20,11 @@ from src.config import TOP_K
 from src.domain.interfaces import (
     EmbeddingService,
     GraphStore,
+    IntentClassifier,
     Reranker,
     VectorStore,
 )
 from src.domain.models import RetrievalResult
-from src.infrastructure.chroma_store import ChromaStore
-from src.infrastructure.cross_encoder import CrossEncoderReranker
-from src.infrastructure.networkx_graph import NetworkXGraphStore
-from src.infrastructure.sentence_transformer import SentenceTransformerEmbeddingService
 from src.pipeline.query_enhancer import enhance_query
 
 logger = logging.getLogger(__name__)
@@ -55,58 +54,47 @@ STOPWORDS: set[str] = {
 
 def _compute_lexical_density(query_terms: list[str], text: str, breadcrumb: str) -> float:
     """Compute exact term match density in breadcrumb and text body."""
-    # Double breadcrumb weight: heading/phase terms are stronger relevance signals than body text
     combined = f"{breadcrumb} {breadcrumb} {text}".lower()
     matches = sum(1 for term in query_terms if term in combined)
     return matches / max(len(query_terms), 1)
 
 
+# ── Lazy Dependency Inversion Helpers ─────────────────────────────────────────
+
+def _default_vector_store() -> VectorStore:
+    from src.infrastructure.chroma_store import ChromaStore
+    return ChromaStore()
+
+
+def _default_graph_store() -> GraphStore:
+    from src.infrastructure.networkx_graph import NetworkXGraphStore
+    return NetworkXGraphStore()
+
+
+def _default_embedding_service() -> EmbeddingService:
+    from src.infrastructure.sentence_transformer import SentenceTransformerEmbeddingService
+    return SentenceTransformerEmbeddingService()
+
+
+def _default_reranker() -> Reranker:
+    from src.infrastructure.cross_encoder import CrossEncoderReranker
+    return CrossEncoderReranker()
+
+
 # ═════════════════════════════════════════════════════════════════════════════
-#  Hybrid Retriever
+#  SRP Component: BM25 Lexical Index
 # ═════════════════════════════════════════════════════════════════════════════
 
-class HybridRetriever:
-    """Three-signal retriever with reciprocal-rank fusion and interface-based DI."""
+class BM25SearchIndex:
+    """Encapsulates BM25 corpus preparation, cyber-aware tokenization, and lexical search."""
 
-    # ── Initialisation ───────────────────────────────────────────────────
-
-    def __init__(
-        self,
-        vector_store: VectorStore | None = None,
-        graph_store: GraphStore | None = None,
-        embedding_service: EmbeddingService | None = None,
-        reranker: Reranker | None = None,
-    ) -> None:
-        self.vector_store: VectorStore = vector_store or ChromaStore()
-        self.graph_store: GraphStore = graph_store or NetworkXGraphStore()
-        self.embedding_service: EmbeddingService = (
-            embedding_service or SentenceTransformerEmbeddingService()
-        )
-        self.reranker: Reranker = reranker or CrossEncoderReranker()
-
-        # Load every document from VectorStore
-        self.docs: list[dict[str, Any]] = self.vector_store.get_all_documents()
-
-        # Build BM25 index (lowercase tokenised with punctuation stripping)
-        corpus = [
-            self._tokenize(doc["text"]) for doc in self.docs
-        ]
+    def __init__(self, docs: list[dict[str, Any]]) -> None:
+        self.docs = docs
+        corpus = [self.tokenize(doc["text"]) for doc in docs]
         self.bm25 = BM25Okapi(corpus) if corpus else None
 
-        # Expose graph & collection for backward-compatibility
-        self.graph = getattr(self.graph_store, "graph", None)
-        self.collection = getattr(self.vector_store, "collection", None)
-
-        n_nodes = self.graph.number_of_nodes() if self.graph is not None else 0
-        logger.info(
-            f"🔎 HybridRetriever ready  "
-            f"({len(self.docs)} docs, {n_nodes} graph nodes)"
-        )
-
-    # ── BM25 (lexical) ──────────────────────────────────────────────────
-
     @staticmethod
-    def _tokenize(text: str) -> list[str]:
+    def tokenize(text: str) -> list[str]:
         """Cyber-aware tokenization: preserves compound identifiers while indexing sub-tokens."""
         tokens: list[str] = []
         raw_words = text.lower().split()
@@ -115,7 +103,6 @@ class HybridRetriever:
             if not clean:
                 continue
             tokens.append(clean)
-            # Sub-token splitting on delimiters common in code, CVEs, tools, and scripts
             if any(delim in clean for delim in ("-", "_", ".", "/", "\\", ":")):
                 sub_parts = re.split(r"[-_./\\:]+", clean)
                 for part in sub_parts:
@@ -123,21 +110,26 @@ class HybridRetriever:
                         tokens.append(part)
         return tokens
 
-    def bm25_search(
-        self, query: str, top_k: int = TOP_K, os_filter: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """Return the *top_k* BM25 hits, respecting OS filter if specified."""
+    def get_scores_for_query(self, query: str) -> Any:
+        """Return raw BM25 scores across all corpus documents for a query."""
         if not self.bm25 or not self.docs:
             return []
-
-        words = self._tokenize(query)
+        words = self.tokenize(query)
         clean_tokens = [w for w in words if w not in STOPWORDS]
         tokens = clean_tokens if clean_tokens else words
         if not tokens:
             tokens = query.lower().split()
-        scores = self.bm25.get_scores(tokens)
+        return self.bm25.get_scores(tokens)
 
-        # Filter candidate indices by OS if specified (keep unknown OS to prevent false negatives)
+    def search(
+        self, query: str, top_k: int = TOP_K, os_filter: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Return the top_k BM25 hits, respecting OS filter if specified."""
+        if not self.bm25 or not self.docs:
+            return []
+
+        scores = self.get_scores_for_query(query)
+
         valid_indices = []
         for idx, doc in enumerate(self.docs):
             if os_filter:
@@ -163,32 +155,22 @@ class HybridRetriever:
             })
         return results
 
-    # ── Vector Search (semantic) ─────────────────────────────────────────
 
-    def vector_search(
-        self,
-        query: str,
-        top_k: int = TOP_K,
-        where: dict[str, Any] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Return the *top_k* nearest-neighbour hits from VectorStore."""
-        q_embedding = self.embedding_service.embed_query(query)
-        return self.vector_store.query(embedding=q_embedding, top_k=top_k, where=where)
+# ═════════════════════════════════════════════════════════════════════════════
+#  SRP Component: Reciprocal Rank Fusion Engine
+# ═════════════════════════════════════════════════════════════════════════════
 
-    # ── Reciprocal Rank Fusion ───────────────────────────────────────────
+class RankFusionEngine:
+    """Multi-channel rank fusion engine implementing Reciprocal Rank Fusion (RRF)."""
 
     @staticmethod
-    def reciprocal_rank_fusion(
+    def fuse(
         bm25_results: list[dict[str, Any]],
         vector_results: list[dict[str, Any]],
         k: int = 60,
         extra_results: list[list[dict[str, Any]]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Merge ranked lists using principled multi-channel RRF (k = 60 by default).
-
-        Each document is keyed by its text MD5 hash to allow
-        matching across the result sets.
-        """
+        """Merge ranked lists using principled multi-channel RRF."""
         scores: dict[str, float] = {}
         doc_map: dict[str, dict[str, Any]] = {}
 
@@ -201,11 +183,9 @@ class HybridRetriever:
                 key = hashlib.md5(item["text"].encode("utf-8")).hexdigest()
                 scores[key] = scores.get(key, 0.0) + 1.0 / (k + item["rank"])
 
-                # Keep the richer metadata version
                 if key not in doc_map:
                     doc_map[key] = item
 
-        # Sort by fused score descending
         ranked_keys = sorted(scores, key=scores.get, reverse=True)  # type: ignore[arg-type]
 
         merged: list[dict[str, Any]] = []
@@ -217,6 +197,144 @@ class HybridRetriever:
 
         return merged
 
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  SRP Component: Result Diversifier
+# ═════════════════════════════════════════════════════════════════════════════
+
+class ResultDiversifier:
+    """Enforces target-aware source diversity across retrieved chunks without artificial gating."""
+
+    @staticmethod
+    def diversify(
+        chunks: list[dict[str, Any]],
+        query: str,
+        is_broad: bool = False,
+        effective_top_k: int = 8,
+        max_per_machine: int | None = None,
+        **kwargs: Any,
+    ) -> list[dict[str, Any]]:
+        """Diversify chunks to avoid single verbose writeups flooding context."""
+        targets_specific_machine = bool(re.search(r"\bhtb-[a-z0-9_-]+\b", query.lower()))
+        if max_per_machine is not None:
+            per_machine_cap = max_per_machine
+        elif targets_specific_machine:
+            per_machine_cap = effective_top_k
+        elif is_broad:
+            per_machine_cap = 1
+        else:
+            per_machine_cap = 2
+
+        diversified: list[dict[str, Any]] = []
+        machine_counts: dict[str, int] = {}
+
+        # Pure neural ranking: retain the cross-encoder's relevance order
+        for chunk in chunks:
+            src = chunk.get("metadata", {}).get("source", "unknown").lower()
+            count = machine_counts.get(src, 0)
+            if count < per_machine_cap:
+                diversified.append(chunk)
+                machine_counts[src] = count + 1
+
+            if len(diversified) >= effective_top_k:
+                break
+
+        for rank, chunk in enumerate(diversified, 1):
+            chunk["rank"] = rank
+
+        return diversified
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Hybrid Retriever (Orchestrator)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class HybridRetriever:
+    """Three-signal retriever with reciprocal-rank fusion and interface-based DI."""
+
+    def __init__(
+        self,
+        vector_store: VectorStore | None = None,
+        graph_store: GraphStore | None = None,
+        embedding_service: EmbeddingService | None = None,
+        reranker: Reranker | None = None,
+        intent_classifier: IntentClassifier | None = None,
+    ) -> None:
+        self.vector_store: VectorStore = vector_store or _default_vector_store()
+        self.graph_store: GraphStore = graph_store or _default_graph_store()
+        self.embedding_service: EmbeddingService = (
+            embedding_service or _default_embedding_service()
+        )
+        self.reranker: Reranker = reranker or _default_reranker()
+        self.intent_classifier: IntentClassifier | None = intent_classifier
+
+        # Load every document from VectorStore
+        self.docs: list[dict[str, Any]] = self.vector_store.get_all_documents()
+
+        # Dedicated BM25 index component (SRP)
+        self._bm25_index = BM25SearchIndex(self.docs)
+        self.bm25 = self._bm25_index.bm25
+
+        # Expose graph & collection for backward-compatibility
+        self.graph = getattr(self.graph_store, "graph", None)
+        self.collection = getattr(self.vector_store, "collection", None)
+
+        # Inverted index of source machine -> document chunks and indices for graph-guided candidate retrieval
+        self._machine_docs: dict[str, list[dict[str, Any]]] = {}
+        self._machine_doc_indices: dict[str, list[int]] = {}
+        for idx, doc in enumerate(self.docs):
+            src = doc.get("metadata", {}).get("source", "").lower()
+            if src:
+                self._machine_docs.setdefault(src, []).append(doc)
+                self._machine_doc_indices.setdefault(src, []).append(idx)
+
+        stats = (
+            self.graph_store.get_stats()
+            if hasattr(self.graph_store, "get_stats")
+            else {}
+        )
+        n_nodes = stats.get("nodes", self.graph.number_of_nodes() if self.graph is not None else 0)
+        logger.info(
+            f"🔎 HybridRetriever ready  "
+            f"({len(self.docs)} docs, {n_nodes} graph nodes)"
+        )
+
+    # ── BM25 Delegator ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _tokenize(text: str) -> list[str]:
+        return BM25SearchIndex.tokenize(text)
+
+    def bm25_search(
+        self, query: str, top_k: int = TOP_K, os_filter: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self._bm25_index.search(query, top_k=top_k, os_filter=os_filter)
+
+    # ── Vector Search ────────────────────────────────────────────────────
+
+    def vector_search(
+        self,
+        query: str,
+        top_k: int = TOP_K,
+        where: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return the top_k nearest-neighbour hits from VectorStore."""
+        q_embedding = self.embedding_service.embed_query(query)
+        return self.vector_store.query(embedding=q_embedding, top_k=top_k, where=where)
+
+    # ── Rank Fusion Delegator ────────────────────────────────────────────
+
+    @staticmethod
+    def reciprocal_rank_fusion(
+        bm25_results: list[dict[str, Any]],
+        vector_results: list[dict[str, Any]],
+        k: int = 60,
+        extra_results: list[list[dict[str, Any]]] | None = None,
+    ) -> list[dict[str, Any]]:
+        return RankFusionEngine.fuse(
+            bm25_results, vector_results, k=k, extra_results=extra_results
+        )
+
     # ── Metadata filter builder ──────────────────────────────────────────
 
     @staticmethod
@@ -224,10 +342,7 @@ class HybridRetriever:
         os: str | None = None,
         difficulty: str | None = None,
     ) -> dict[str, Any] | None:
-        """Build a ChromaDB-compatible ``$and`` filter from optional params.
-
-        Returns ``None`` when no filters are active.
-        """
+        """Build a ChromaDB-compatible ``$and`` filter from optional params."""
         clauses: list[dict[str, Any]] = []
         if os:
             clauses.append({"os": os})
@@ -243,9 +358,13 @@ class HybridRetriever:
     # ── Query intent detection ───────────────────────────────────────────
 
     @staticmethod
-    def detect_query_intent(query: str, graph: Any = None) -> dict[str, Any]:
+    def detect_query_intent(
+        query: str,
+        graph: Any = None,
+        router: IntentClassifier | None = None,
+    ) -> dict[str, Any]:
         """Dynamically extract query intent using enhance_query (LLM + Knowledge Graph)."""
-        enh = enhance_query(query, graph)
+        enh = enhance_query(query, graph, router=router)
         return {
             "os": enh.target_os,
             "difficulty": enh.difficulty,
@@ -255,6 +374,7 @@ class HybridRetriever:
             "expanded_terms": enh.expanded_terms,
             "expanded_query": enh.expanded_query,
             "multi_queries": enh.multi_queries,
+            "suggested_top_k": enh.suggested_top_k,
         }
 
     # ── Main retrieve entry-point ────────────────────────────────────────
@@ -266,103 +386,176 @@ class HybridRetriever:
         os_filter: str | None = None,
         difficulty_filter: str | None = None,
     ) -> RetrievalResult:
-        """Run the full hybrid retrieval pipeline.
-
-        Returns::
-
-            {
-                "chunks":          [merged top-k dicts],
-                "graph":           {matched_categories, …, relevant_machines},
-                "query":           original query string,
-                "filters_applied": {"os": …, "difficulty": …},
-            }
-        """
+        """Run the full hybrid retrieval pipeline."""
         # Dynamic intent detection and query expansion
-        intent = self.detect_query_intent(query, self.graph)
-        expanded_query = intent.get("expanded_query", query)
+        router = getattr(self, "intent_classifier", None)
+        intent = self.detect_query_intent(query, self.graph, router=router)
 
         os_val   = os_filter   or intent["os"]
         diff_val = difficulty_filter or intent["difficulty"]
 
         where = self.build_where_filter(os_val, diff_val)
 
-        # ── Scope-based settings ──────────────────────────────────────────
+        graph_hits = self.graph_store.query_graph(query)
+        n_graph_machines = len(graph_hits.get("relevant_machines", [])) if graph_hits else 0
+
+        # Scope-based settings with LLM-adaptive budget & graph fallback
         scope = intent.get("scope", "specific")
         is_broad = (scope == "broad")
+        llm_suggested_k = intent.get("suggested_top_k")
 
-        # Dynamically size top_k to avoid underfitting broad questions
-        base_k = top_k or 8
-        effective_top_k = max(base_k, 12 if is_broad else base_k)
-        candidate_pool = 60
-
-        # ── Stage 1: Candidate Generation (BM25 + Dense Vector + KG Grounding)
-        bm25_hits = self.bm25_search(query, top_k=candidate_pool, os_filter=os_val)
-        vector_hits = self.vector_search(query, top_k=candidate_pool, where=where)
-        graph_hits = self.graph_store.query_graph(query)
-
-        # Principled Knowledge Graph grounding as an explicit RRF rank channel
-        extra_channels: list[list[dict[str, Any]]] = []
-        relevant_machines = set(graph_hits.get("relevant_machines", []))
-        if relevant_machines:
-            seen_texts: set[str] = set()
-            graph_ranked: list[dict[str, Any]] = []
-            for hit in (vector_hits + bm25_hits):
-                t = hit.get("text", "")
-                if t in seen_texts:
-                    continue
-                seen_texts.add(t)
-                src = hit.get("metadata", {}).get("source", "")
-                if src in relevant_machines:
-                    hit_copy = dict(hit)
-                    hit_copy["rank"] = len(graph_ranked) + 1
-                    graph_ranked.append(hit_copy)
-            if graph_ranked:
-                extra_channels.append(graph_ranked)
-
-        # Multi-Channel Reciprocal Rank Fusion (standard k=60 without magic multipliers)
-        merged = self.reciprocal_rank_fusion(
-            bm25_hits, vector_hits, k=60, extra_results=extra_channels
-        )
-
-        # Sort after fusion
-        merged.sort(key=lambda x: x.get("rrf_score", 0.0), reverse=True)
-
-        # ── Stage 2: Cross-Encoder Re-Ranking on top candidate pool ───────
-        rerank_pool = min(len(merged), 35)
-        merged[:rerank_pool] = self.reranker.rerank(query, merged[:rerank_pool])
-
-        # ── Stage 3: Source Diversification ───────────────────────────────
-        # Target-aware diversification:
-        # - Broad survey queries: max 1 chunk per machine to maximize coverage breadth.
-        # - Machine-specific queries: do not starve the target machine of its multi-step walkthrough.
-        # - General queries: allow up to 3 chunks per machine to preserve multi-step exploit chains.
-        targets_specific_machine = bool(re.search(r"\bhtb-[a-z0-9_-]+\b", query.lower()))
-        if targets_specific_machine:
-            max_per_machine = effective_top_k
-        elif is_broad:
+        base_k = top_k or TOP_K or 6
+        if is_broad:
+            candidate_pool = 25  # Lean candidate pool: fast CPU cross-encoder reranking (~2s)
+            # Lean & high-precision budget: 6-8 chunks for detailed steps, letting Graph Manifest provide corpus inventory
+            if llm_suggested_k and isinstance(llm_suggested_k, int):
+                effective_top_k = min(max(llm_suggested_k, 5), 8)
+            else:
+                effective_top_k = min(max(base_k, 6), 8)
             max_per_machine = 1
         else:
-            max_per_machine = 3
+            candidate_pool = 20  # Fast CPU candidate pool (~1.5s)
+            # For specific query: 4-6 pinpoint chunks
+            if llm_suggested_k and isinstance(llm_suggested_k, int):
+                effective_top_k = min(max(llm_suggested_k, 4), 6)
+            else:
+                effective_top_k = min(base_k, 5) if base_k else 5
+            max_per_machine = 2
 
-        diversified: list[dict[str, Any]] = []
-        machine_counts: dict[str, int] = {}
+        # Stage 1: Candidate Generation (BM25 Lexical + Dense Vector Semantic)
+        bm25_hits = self.bm25_search(query, top_k=candidate_pool, os_filter=os_val)
+        vector_hits = self.vector_search(query, top_k=candidate_pool, where=where)
 
-        for chunk in merged:
-            src = chunk.get("metadata", {}).get("source", "unknown")
-            count = machine_counts.get(src, 0)
-            if count < max_per_machine:
-                diversified.append(chunk)
-                machine_counts[src] = count + 1
-            if len(diversified) >= effective_top_k:
-                break
+        # Phase 4: Multi-Query Retrieval (LLM Sub-queries + Graph Techniques)
+        extra_channels: list[list[dict[str, Any]]] = []
+        extra_queries: list[str] = []
+        for sq in intent.get("multi_queries", []):
+            if sq and sq.lower().strip() != query.lower().strip() and sq not in extra_queries:
+                extra_queries.append(sq)
 
-        for rank, chunk in enumerate(diversified, 1):
-            chunk["rank"] = rank
+        if graph_hits:
+            matched_techs = [
+                t for t in graph_hits.get("matched_techniques", [])
+                if isinstance(t, str) and t.strip()
+            ][:3]
+            for t in matched_techs:
+                if t not in extra_queries:
+                    extra_queries.append(t)
 
-        final_chunks = diversified
+        for eq in extra_queries[:3]:  # Cap at top 3 extra query angles to bound latency
+            eq_bm25 = self.bm25_search(eq, top_k=25, os_filter=os_val)
+            eq_vec = self.vector_search(eq, top_k=25, where=where)
+            if eq_bm25:
+                extra_channels.append(eq_bm25)
+            if eq_vec:
+                extra_channels.append(eq_vec)
 
-        # ── Authentic Retrieval Result (Zero Manifest Injection / Zero Overfitting) ──
+        # Multi-Channel Reciprocal Rank Fusion (unbiased fusion of lexical + semantic ranks)
+        merged = self.reciprocal_rank_fusion(
+            bm25_hits,
+            vector_hits,
+            k=60,
+            extra_results=extra_channels if extra_channels else None,
+        )
+        merged.sort(key=lambda x: x.get("rrf_score", 0.0), reverse=True)
+
+        # Stage 1.5: Graph-Guided Candidate Injection (Phase 1: Broad Query Coverage Expansion)
+        # Pull best chunk per missing graph-connected machine so the cross-encoder can evaluate them
+        if graph_hits and (is_broad or graph_hits.get("matched_techniques") or graph_hits.get("matched_cves")):
+            graph_machines = graph_hits.get("relevant_machines", [])
+            machine_docs = getattr(self, "_machine_docs", {})
+            if graph_machines and machine_docs:
+                already_retrieved = {
+                    c.get("metadata", {}).get("source", "").lower()
+                    for c in merged
+                    if c.get("metadata", {}).get("source")
+                }
+                missing_machines = [
+                    m for m in graph_machines
+                    if m.lower() not in already_retrieved and m.lower() in machine_docs
+                ][:30]  # Cap at 25-30 extra candidates to prevent pool bloat
+
+                if missing_machines:
+                    bm25_index = getattr(self, "_bm25_index", None)
+                    bm25_scores = (
+                        bm25_index.get_scores_for_query(query)
+                        if bm25_index is not None
+                        else None
+                    )
+                    machine_indices = getattr(self, "_machine_doc_indices", {})
+                    injected_chunks: list[dict[str, Any]] = []
+
+                    for rank_offset, m in enumerate(missing_machines, 1):
+                        m_low = m.lower()
+                        indices = machine_indices.get(m_low, [])
+                        if not indices and m_low in machine_docs:
+                            doc_list = machine_docs[m_low]
+                            if doc_list:
+                                injected_chunks.append({
+                                    "text": doc_list[0].get("text", ""),
+                                    "metadata": doc_list[0].get("metadata", {}),
+                                    "score": 0.0,
+                                    "rrf_score": 0.0,
+                                    "rank": len(merged) + rank_offset,
+                                    "source_channel": "graph_expansion",
+                                })
+                            continue
+
+                        # Respect OS filter if active
+                        if os_val:
+                            filtered_indices = [
+                                i for i in indices
+                                if self.docs[i].get("metadata", {}).get("os", "unknown") in (os_val, "unknown")
+                            ]
+                            if filtered_indices:
+                                indices = filtered_indices
+
+                        if not indices:
+                            continue
+
+                        if bm25_scores is not None and len(bm25_scores) > 0:
+                            best_idx = max(indices, key=lambda i: bm25_scores[i])
+                            best_score = float(bm25_scores[best_idx])
+                        else:
+                            best_idx = indices[0]
+                            best_score = 0.0
+
+                        best_doc = self.docs[best_idx]
+                        injected_chunks.append({
+                            "text": best_doc.get("text", ""),
+                            "metadata": best_doc.get("metadata", {}),
+                            "score": best_score,
+                            "rrf_score": 0.0,
+                            "rank": len(merged) + rank_offset,
+                            "source_channel": "graph_expansion",
+                        })
+
+                    if injected_chunks:
+                        # Append with lower initial rank so they don't displace top RRF hits,
+                        # but guarantee they fit within the cross-encoder rerank pool
+                        target_pool_budget = 120
+                        base_budget = max(0, target_pool_budget - len(injected_chunks))
+                        merged = merged[:base_budget] + injected_chunks
+
+        # Stage 2: Cross-Encoder Re-Ranking on candidate pool (fast reranking on 40-60 items)
+        rerank_pool = min(len(merged), 60 if is_broad else 40)
+        merged[:rerank_pool] = self.reranker.rerank(query, merged[:rerank_pool])
+
+        # Stage 3: Source Diversification (pure neural cross-encoder order, no artificial cut-offs)
+        final_chunks = ResultDiversifier.diversify(
+            merged,
+            query=query,
+            is_broad=is_broad,
+            effective_top_k=effective_top_k,
+            max_per_machine=max_per_machine,
+        )
+
+        # Stage 4: Knowledge Graph Manifest Injection for Broad Queries (Corpus-Wide Coverage)
         manifest = None
+        if is_broad:
+            manifest = self.graph_store.get_manifest_for_query(query, os_filter=os_val)
+            if manifest:
+                logger.info(f"📋 Graph Manifest attached: {len(manifest)} machines for corpus coverage")
 
         return RetrievalResult(
             chunks=final_chunks[:effective_top_k],
@@ -371,4 +564,3 @@ class HybridRetriever:
             filters_applied={"os": os_val, "difficulty": diff_val},
             manifest=manifest,
         )
-

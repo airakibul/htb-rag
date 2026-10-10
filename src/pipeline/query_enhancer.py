@@ -13,6 +13,7 @@ from typing import Any
 
 import networkx as nx
 
+from src.domain.interfaces import IntentClassifier
 from src.domain.models import EnhancedQuery
 from src.graph.builder import load_graph
 from src.graph.querier import query_graph
@@ -20,28 +21,36 @@ from src.graph.querier import query_graph
 logger = logging.getLogger(__name__)
 
 
-def _fallback_enhance(query: str, graph: nx.DiGraph | None = None) -> EnhancedQuery:
-    """Clean, un-overfitted query intent parsing using neural SemanticIntentRouter."""
-    from src.infrastructure.intent_router import get_intent_router
+def _fallback_enhance(
+    query: str,
+    graph: nx.DiGraph | None = None,
+    router: IntentClassifier | None = None,
+) -> EnhancedQuery:
+    """Clean, un-overfitted query intent parsing using Adaptive Query Planner (or Semantic router)."""
+    if router is None:
+        from src.infrastructure.intent_router import get_intent_router
+        router = get_intent_router()
 
-    router = get_intent_router()
     intent = router.classify_intent(query)
 
-    query_scope = intent["scope"]
-    target_os = intent["target_os"]
-    target_phase = intent["target_phase"]
+    query_scope = intent.get("scope", "specific")
+    target_os = intent.get("target_os")
+    target_phase = intent.get("target_phase")
+    suggested_top_k = intent.get("suggested_top_k") or intent.get("top_k")
+    sub_queries = intent.get("sub_queries") or []
 
-    # Difficulty detection
-    low = query.lower()
-    difficulty = None
-    for d in ("insane", "hard", "medium", "easy"):
-        if re.search(rf"\b{d}\b", low):
-            difficulty = d
-            break
+    # Difficulty detection (from planner, with fallback)
+    difficulty = intent.get("difficulty")
+    if not difficulty:
+        low = query.lower()
+        for d in ("insane", "hard", "medium", "easy"):
+            if re.search(rf"\b{d}\b", low):
+                difficulty = d
+                break
 
     # Standard CVE aliases from graph if a CVE is explicitly queried
     expanded_terms: list[str] = []
-    cve_matches = re.findall(r"cve-\d{4}-\d+", low)
+    cve_matches = re.findall(r"cve-\d{4}-\d+", query.lower())
     if cve_matches:
         g = graph if graph is not None else load_graph()
         if g is not None:
@@ -50,7 +59,12 @@ def _fallback_enhance(query: str, graph: nx.DiGraph | None = None) -> EnhancedQu
                 if cve_upper in g:
                     expanded_terms.extend(g.nodes[cve_upper].get("aliases", []))
 
-    # Keep query untouched — NO artificial keyword stuffing or appending
+    multi_queries = [query]
+    if sub_queries:
+        for sq in sub_queries:
+            if sq and sq not in multi_queries:
+                multi_queries.append(sq)
+
     return EnhancedQuery(
         query=query,
         expanded_query=query,
@@ -59,7 +73,8 @@ def _fallback_enhance(query: str, graph: nx.DiGraph | None = None) -> EnhancedQu
         query_scope=query_scope,
         target_phase=target_phase,
         difficulty=difficulty,
-        multi_queries=[query],
+        multi_queries=multi_queries,
+        suggested_top_k=suggested_top_k,
     )
 
 
@@ -71,6 +86,10 @@ def generate_multi_queries(query: str, enh: EnhancedQuery | None = None) -> list
     return [query]
 
 
-def enhance_query(query: str, graph: nx.DiGraph | None = None) -> EnhancedQuery:
+def enhance_query(
+    query: str,
+    graph: nx.DiGraph | None = None,
+    router: IntentClassifier | None = None,
+) -> EnhancedQuery:
     """Enhance user query dynamically without query mutation."""
-    return _fallback_enhance(query, graph)
+    return _fallback_enhance(query, graph, router=router)

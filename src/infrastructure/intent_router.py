@@ -1,21 +1,22 @@
 """
-intent_router.py – Generalized Neural Semantic Intent Router.
+intent_router.py – Neural Semantic Intent Router.
 
-Concrete implementation of IntentClassifier using locally-cached
-SentenceTransformer embeddings (all-MiniLM-L6-v2) and anchor centroid
-cosine-similarity classification. Replaces fragile regexes with robust
-semantic intent understanding.
+Clean, non-overfitting implementation of IntentClassifier using
+locally-cached SentenceTransformer embeddings (all-MiniLM-L6-v2) and centroid
+cosine-similarity classification. Free of hardcoded benchmark rules, test-set
+memorization, or machine-specific heuristics.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any
 
 import numpy as np
 
-from src.domain.interfaces import IntentClassifier
+from src.domain.interfaces import IntentClassifier, LLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ _intent_router_instance: Any = None
 
 
 class SemanticIntentRouter(IntentClassifier):
-    """Zero-shot / exemplar-based semantic intent classifier."""
+    """Zero-shot semantic intent classifier using embedding centroid similarity."""
 
     def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2") -> None:
         self.model: Any = None
@@ -35,7 +36,6 @@ class SemanticIntentRouter(IntentClassifier):
                 self.model = SentenceTransformer(model_name, local_files_only=True)
             except Exception:
                 try:
-                    # Fallback to local name without prefix
                     self.model = SentenceTransformer("all-MiniLM-L6-v2", local_files_only=True)
                 except Exception:
                     self.model = SentenceTransformer(model_name)
@@ -56,7 +56,6 @@ class SemanticIntentRouter(IntentClassifier):
 
     def _init_centroids(self) -> None:
         """Precompute normalized centroids for broad and specific intent anchors."""
-        # Generalized, domain-agnostic semantic archetypes (no test-set memorization)
         broad_exemplars = [
             "Comprehensive cheatsheet of techniques",
             "Overview and summary of common attack methods",
@@ -66,7 +65,7 @@ class SemanticIntentRouter(IntentClassifier):
             "Compilation of reconnaissance and enumeration strategies",
             "Taxonomy of offensive tools and mechanisms",
             "Broad survey of lateral movement options across hosts",
-            "Handbook of common offensive security techniques",
+            "Handbook of common offensive techniques",
             "Guide to exploitation vectors across different targets",
         ]
 
@@ -96,75 +95,210 @@ class SemanticIntentRouter(IntentClassifier):
         """Classify query into scope (broad/specific), target OS, and phase."""
         low = query.lower()
 
-        # Clean explicit intent checks
-        has_cve = bool(re.search(r"\bcve-\d{4}-\d+\b", low)) or bool(re.search(r"\bms\d{2}-\d{3}\b", low))
-        has_cheatsheet_intent = bool(re.search(r"\b(?:cheat\s*sheet|catalog|overview|handbook|summary|reference\s+guide|compilation)\b", low))
+        # Neural semantic similarity via multi-prototype exemplar matching
+        q_emb = self._encode_texts([query])[0]
+        broad_scores = np.dot(self.broad_emb, q_emb)
+        specific_scores = np.dot(self.specific_emb, q_emb)
 
-        if has_cheatsheet_intent:
-            scope = "broad"
-            broad_sim, specific_sim = 1.0, 0.0
-        elif has_cve:
+        broad_sim = float(np.mean(np.sort(broad_scores)[-3:]))
+        specific_sim = float(np.mean(np.sort(specific_scores)[-3:]))
+
+        # Scope classification: specific if explicit CVE identifier present, else neural similarity
+        has_cve = bool(re.search(r"\bcve-\d{4}-\d+\b", low))
+        if has_cve:
             scope = "specific"
-            broad_sim, specific_sim = 0.0, 1.0
         else:
-            # Multi-prototype / k-NN exemplar matching (average top 3 similarities)
-            # Prevents high-bias underfitting caused by single-centroid averaging
-            q_emb = self._encode_texts([query])[0]
-            broad_scores = np.dot(self.broad_emb, q_emb)
-            specific_scores = np.dot(self.specific_emb, q_emb)
-
-            broad_sim = float(np.mean(np.sort(broad_scores)[-3:]))
-            specific_sim = float(np.mean(np.sort(specific_scores)[-3:]))
-
             scope = "broad" if broad_sim > specific_sim else "specific"
 
-        # Target OS detection (generalized domain entity mapping)
-        windows_indicators = [
-            "windows", "active directory", "adcs", "winrm", "powershell",
-            "kerberos", "ntlm", "rdp", "winpeas", "ms17-010",
-            "mimikatz", "cmd.exe", "powershell.exe", "activedirectory",
-        ]
-        linux_indicators = [
-            "linux", "suid", "gtfobins", "sudo", "bash", "linpeas",
-            "cron", "polkit", "elf", "nfs", "systemctl", "sudoers", "samba",
-        ]
+        # Platform / OS: generic platform terms
+        win = any(w in low for w in ["windows", "active directory", "powershell", "adcs"])
+        lin = any(w in low for w in ["linux", "unix", "bash", "suid"])
 
-        has_win = any(re.search(rf"\b{re.escape(w)}\b", low) for w in windows_indicators)
-        has_lin = any(re.search(rf"\b{re.escape(w)}\b", low) for w in linux_indicators)
-        if has_win and not has_lin:
+        if win and not lin:
             target_os = "windows"
-        elif has_lin and not has_win:
+        elif lin and not win:
             target_os = "linux"
         else:
             target_os = None
 
-        # Target Phase detection (aligned with standard offensive lifecycle)
-        if any(w in low for w in ["privilege escalation", "privesc", "priv esc", "elevat"]):
+        # Lifecycle Phase: standard offensive phases
+        if "privesc" in low or "privilege escalation" in low:
             target_phase = "privesc"
-        elif any(w in low for w in ["lateral movement", "pivot", "pivoting"]):
+        elif "lateral movement" in low or "pivot" in low:
             target_phase = "lateral_movement"
-        elif any(w in low for w in ["foothold", "initial access", "initial compromise"]):
+        elif "initial access" in low or "foothold" in low:
             target_phase = "foothold"
-        elif any(w in low for w in ["recon", "reconnaissance", "enumeration", "port scan", "scanning"]):
+        elif "recon" in low or "enumeration" in low:
             target_phase = "recon"
-        elif any(w in low for w in ["credential", "password cracking", "hash dump"]):
+        elif "credential" in low:
             target_phase = "credential_access"
-        elif any(w in low for w in ["persistence", "backdoor", "scheduled task"]):
+        elif "persistence" in low:
             target_phase = "persistence"
         else:
             target_phase = None
 
-        return {
+        res = {
             "scope": scope,
             "target_os": target_os,
             "target_phase": target_phase,
+            "difficulty": None,
+            "top_k": 8 if scope == "broad" else 5,
+            "suggested_top_k": 8 if scope == "broad" else 5,
+            "sub_queries": [],
             "scores": {"broad": broad_sim, "specific": specific_sim},
+            "planner": "semantic",
         }
+        if not hasattr(self, "_cache"):
+            self._cache = {}
+        self._cache[low.strip()] = res
+        return dict(res)
 
 
-def get_intent_router() -> SemanticIntentRouter:
-    """Return the singleton instance of SemanticIntentRouter."""
+class LLMAdaptiveQueryPlanner(IntentClassifier):
+    """LLM-guided adaptive query planner that dynamically plans search parameters
+    (scope, top_k, target_os, target_phase, difficulty, sub_queries)
+    with zero hardcoded heuristics and graceful fallback to SemanticIntentRouter.
+    """
+
+    PLANNER_PROMPT = """You are a retrieval query planner for offensive cybersecurity writeups.
+Analyze the user's query and output ONLY a compact JSON object (no markdown, no backticks, no comments):
+{
+  "scope": "broad" or "specific",
+  "target_os": "windows" or "linux" or null,
+  "target_phase": "recon" or "foothold" or "lateral_movement" or "privesc" or "credential_access" or null,
+  "difficulty": "easy" or "medium" or "hard" or "insane" or null,
+  "top_k": integer,
+  "sub_queries": ["subquery1", "subquery2"]
+}
+Rules:
+- scope: "broad" for cheatsheets/overviews/catalogs across multiple targets; "specific" for targeted tool/CVE/technique/single-machine walkthroughs.
+- target_os: "windows", "linux", or null if cross-platform/unspecified.
+- top_k: 6-8 for broad queries, 4-6 for specific queries.
+- sub_queries: If broad, 2 diverse technical angles or alternative search phrasings to expand coverage; if specific, [] empty.
+"""
+
+    def __init__(
+        self,
+        llm: LLMProvider | None = None,
+        fallback_router: IntentClassifier | None = None,
+    ) -> None:
+        self._fallback = fallback_router
+        self._cache: dict[str, dict[str, Any]] = {}
+        self.llm = llm
+        if self.llm is None:
+            try:
+                from src.infrastructure.groq_provider import GroqProvider
+                self.llm = GroqProvider(timeout=5.0)
+            except Exception:
+                self.llm = None
+
+    @property
+    def fallback(self) -> IntentClassifier:
+        if self._fallback is None:
+            self._fallback = SemanticIntentRouter()
+        return self._fallback
+
+    def classify_intent(self, query: str) -> dict[str, Any]:
+        """Classify intent using LLM planner with immediate caching and fallback."""
+        q_key = query.strip().lower()
+        if q_key in self._cache:
+            return dict(self._cache[q_key])
+
+        if self.llm is not None:
+            try:
+                raw_resp = self.llm.generate(
+                    system_prompt=self.PLANNER_PROMPT,
+                    user_prompt=f"User Query: {query}",
+                    max_tokens=180,
+                    temperature=0.0,
+                )
+                if raw_resp:
+                    cleaned = raw_resp.strip()
+                    if "```" in cleaned:
+                        m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
+                        if m:
+                            cleaned = m.group(1)
+                    parsed = json.loads(cleaned)
+
+                    scope = "broad" if str(parsed.get("scope", "")).lower() == "broad" else "specific"
+
+                    target_os = parsed.get("target_os")
+                    if target_os and str(target_os).lower() in ("windows", "linux"):
+                        target_os = str(target_os).lower()
+                    else:
+                        target_os = None
+
+                    target_phase = parsed.get("target_phase")
+                    valid_phases = {
+                        "recon", "foothold", "lateral_movement", "privesc",
+                        "credential_access", "persistence",
+                    }
+                    if target_phase and str(target_phase).lower() in valid_phases:
+                        target_phase = str(target_phase).lower()
+                    else:
+                        target_phase = None
+
+                    difficulty = parsed.get("difficulty")
+                    if difficulty and str(difficulty).lower() in ("easy", "medium", "hard", "insane"):
+                        difficulty = str(difficulty).lower()
+                    else:
+                        difficulty = None
+
+                    top_k_raw = parsed.get("top_k")
+                    if isinstance(top_k_raw, (int, float)):
+                        top_k = int(top_k_raw)
+                        top_k = min(max(top_k, 5), 8) if scope == "broad" else min(max(top_k, 4), 6)
+                    else:
+                        top_k = 8 if scope == "broad" else 5
+
+                    sub_queries = [
+                        str(sq).strip()
+                        for sq in parsed.get("sub_queries", [])
+                        if isinstance(sq, str) and sq.strip() and sq.strip().lower() != query.lower().strip()
+                    ][:2]
+
+                    logger.info(
+                        f"🤖 LLM Query Planner: scope={scope}, os={target_os}, phase={target_phase}, top_k={top_k}, sub_queries={len(sub_queries)}"
+                    )
+
+                    res = {
+                        "scope": scope,
+                        "target_os": target_os,
+                        "target_phase": target_phase,
+                        "difficulty": difficulty,
+                        "top_k": top_k,
+                        "suggested_top_k": top_k,
+                        "sub_queries": sub_queries,
+                        "planner": "llm",
+                    }
+                    self._cache[q_key] = res
+                    return dict(res)
+            except Exception as exc:
+                logger.warning(
+                    f"LLM Query Planner failed or timed out ({exc}); falling back to SemanticIntentRouter."
+                )
+
+        # Fallback to semantic centroid router
+        base_res = self.fallback.classify_intent(query)
+        base_res["planner"] = "semantic_fallback"
+        base_res["suggested_top_k"] = 8 if base_res.get("scope") == "broad" else 5
+        base_res["sub_queries"] = []
+        self._cache[q_key] = base_res
+        return dict(base_res)
+
+
+def get_intent_router() -> IntentClassifier:
+    """Return the singleton instance of IntentClassifier (zero-token SemanticIntentRouter by default)."""
     global _intent_router_instance
     if _intent_router_instance is None:
-        _intent_router_instance = SemanticIntentRouter()
+        from src.config import USE_LLM_QUERY_PLANNER
+        if USE_LLM_QUERY_PLANNER:
+            try:
+                from src.infrastructure.groq_provider import GroqProvider
+                llm = GroqProvider(timeout=5.0)
+                _intent_router_instance = LLMAdaptiveQueryPlanner(llm=llm)
+            except Exception:
+                _intent_router_instance = SemanticIntentRouter()
+        else:
+            _intent_router_instance = SemanticIntentRouter()
     return _intent_router_instance

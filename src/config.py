@@ -30,9 +30,9 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")
 
 # OpenRouter LLM Configuration (Fallback)
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "qwen/qwen3.8-27b:free")
 OPENROUTER_FALLBACK_MODELS = [
-    "qwen/qwen3.8-27b:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
     "google/gemma-4-26b-a4b-it:free",
     "nvidia/nemotron-3-super-120b-a12b:free",
     "openrouter/free",
@@ -46,7 +46,8 @@ GEMINI_VISION_MODEL = "models/gemini-2.5-flash"
 # ── Tuning knobs ──────────────────────────────────────────────────────────────
 EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "128"))
 CHUNK_TOKEN_LIMIT = 600        # ≈ 2 400 characters
-TOP_K = 8
+TOP_K = 6
+USE_LLM_QUERY_PLANNER = os.getenv("USE_LLM_QUERY_PLANNER", "false").lower() in ("true", "1", "yes")
 
 # ── Structured Logging ────────────────────────────────────────────────────────
 import logging

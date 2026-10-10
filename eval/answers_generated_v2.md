@@ -50,7 +50,48 @@ Insufficient data or LLM rate limit reached to generate the answer.
 
 **Answer:**
 
-Insufficient data or LLM rate limit reached to generate the answer.
+# Docker & Container Breakout Cheatsheet
+
+## Privilege Escalation
+
+### 1. CVE-2024-21626 (runc File Descriptor Leak)
+*   **Description:** In `runc` versions up to and including 1.1.11, an internal file descriptor leak allows a newly-spawned container process (via `runc exec`) to have a working directory in the host filesystem namespace. This grants access to the host filesystem ("attack 2").
+*   **Exploitation:**
+    *   Identify `runc` version.
+    *   Execute a process that triggers the leak to gain host filesystem access.
+    *   (seen on: Runner)
+
+### 2. Abuse of `CAP_DAC_READ_SEARCH`
+*   **Description:** If a container has the `CAP_DAC_READ_SEARCH` capability, it can bypass permission checks on file handles.
+*   **Exploitation:**
+    *   Use the `open_by_handle_at` syscall to access handles from other processes on the host.
+    *   This allows reading sensitive files like `/etc/shadow` from the host despite standard permission restrictions.
+    *   (seen on: Cybermonday, Talkative)
+
+### 3. Kernel Module Injection (`CAP_SYS_MODULE`)
+*   **Description:** If the container has the `CAP_SYS_MODULE` capability, it can load arbitrary kernel modules into the host kernel.
+*   **Exploitation:**
+    *   Build a custom kernel module that provides a reverse shell.
+    *   Compile the module inside the container using `make` and `gcc` (ensure Linux headers are present, e.g., in `/usr/src`).
+    *   Load the module into the host kernel to execute code with root privileges.
+    *   (seen on: Monitors)
+
+### 4. CVE-2022-0492 (cgroups Escape)
+*   **Description:** A container breakout vulnerability involving `cgroups`. It allows an unprivileged process to gain access to a privileged process context.
+*   **Exploitation:**
+    *   Utilize `cgroups` and OverlayFS features to escape the container namespace.
+    *   Similar to techniques used in `Ready`, this involves manipulating cgroup notifications to execute commands on the host.
+    *   (seen on: Carpediem)
+
+### 5. Docker VMM-Container Breakout (Legacy/POC)
+*   **Description:** Older breakout techniques involving Virtual Machine Monitor (VMM) or specific Docker configurations.
+*   **Exploitation:**
+    *   Use Proof-of-Concept (POC) tools (e.g., `so`) to resolve host paths and dump files like `/etc/shadow`.
+    *   (seen on: Talkative)
+
+## Also Demonstrated On
+
+Also demonstrated on: Corporate, Data, Earlyaccess, Extension, Feline, Giveback, Intuition, Laboratory, Magicgardens, Mentor, Monitorsfour, Pikatwoo, Quick, Rainyday, Ready, Sink, Sorcery, Stacked, Thenotebook, Toby, Vessel (Docker / Container Breakout)
 
 ---
 

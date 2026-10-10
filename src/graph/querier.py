@@ -76,6 +76,33 @@ def get_cves_for_machine(
     return sorted(cves)
 
 
+def get_machine_details(graph: nx.DiGraph, machine_name: str) -> dict[str, Any] | None:
+    """Return metadata, techniques, tools, and CVEs for a single machine."""
+    if machine_name not in graph:
+        return None
+
+    # Resolve OS from outgoing "os" edge
+    os_val = "unknown"
+    for succ in graph.successors(machine_name):
+        if graph.edges[machine_name, succ].get("rel") == "os":
+            os_val = succ
+            break
+
+    # Techniques (successors with type=technique)
+    techs = sorted(
+        n for n in graph.successors(machine_name)
+        if graph.nodes[n].get("type") == "technique"
+    )
+
+    return {
+        "machine":    machine_name,
+        "os":         os_val,
+        "techniques": techs,
+        "tools":      get_tools_for_machine(graph, machine_name),
+        "cves":       get_cves_for_machine(graph, machine_name),
+    }
+
+
 def query_graph(
     graph: nx.DiGraph, query: str,
 ) -> dict[str, Any]:
@@ -136,6 +163,7 @@ def query_graph(
     # ── Techniques (canonical pattern match, direct name match, or aliases) ───
     GENERIC_TECHNIQUES = {
         "exploit",
+        "exploits",
         "exploitation",
         "intended",
         "shortcut",
@@ -250,7 +278,7 @@ def query_graph(
             if graph.nodes[n].get("type") == "machine"
         )
         for tech in graph.predecessors(cve):
-            if graph.nodes[tech].get("type") == "technique":
+            if graph.nodes[tech].get("type") == "technique" and tech not in CATEGORY_LEVEL_TECHNIQUES and tech != "Failed Exploits":
                 machines.update(get_machines_for_technique(graph, tech))
 
     # If query matched category without specific technique/CVE, expand machines from category techniques

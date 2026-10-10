@@ -37,25 +37,45 @@ class GeminiProvider(LLMProvider):
         if not self.api_key or self.api_key == "your_gemini_key_here":
             return None
         try:
-            import google.generativeai as genai
+            try:
+                from google import genai
+                from google.genai import types
 
-            genai.configure(api_key=self.api_key)
-            model = genai.GenerativeModel(
-                model_name=self.model_name,
-                system_instruction=system_prompt,
-            )
-            logger.info(f"Synthesizing answer via Gemini ({self.model_name})...")
-            response = model.generate_content(
-                user_prompt,
-                generation_config={
-                    "max_output_tokens": max_tokens,
-                    "temperature": temperature,
-                },
-            )
-            if response.text and response.text.strip():
-                cleaned = clean_response(response.text.strip())
-                if cleaned:
-                    return cleaned
+                client = genai.Client(api_key=self.api_key)
+                logger.info(f"Synthesizing answer via Google GenAI ({self.model_name})...")
+                response = client.models.generate_content(
+                    model=self.model_name,
+                    contents=user_prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_prompt,
+                        max_output_tokens=max_tokens,
+                        temperature=temperature,
+                    ),
+                )
+                if response.text and response.text.strip():
+                    cleaned = clean_response(response.text.strip())
+                    if cleaned:
+                        return cleaned
+            except ImportError:
+                import google.generativeai as genai
+
+                genai.configure(api_key=self.api_key)
+                model = genai.GenerativeModel(
+                    model_name=self.model_name,
+                    system_instruction=system_prompt,
+                )
+                logger.info(f"Synthesizing answer via legacy Gemini ({self.model_name})...")
+                response = model.generate_content(
+                    user_prompt,
+                    generation_config={
+                        "max_output_tokens": max_tokens,
+                        "temperature": temperature,
+                    },
+                )
+                if response.text and response.text.strip():
+                    cleaned = clean_response(response.text.strip())
+                    if cleaned:
+                        return cleaned
         except Exception as exc:
             logger.warning(
                 f"Gemini generation failed, falling back to OpenRouter: {exc}"

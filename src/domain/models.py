@@ -20,6 +20,24 @@ class Chunk:
     rrf_score: float = 0.0
     ce_score: float | None = None
 
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default)
+
+    def __getitem__(self, key: str) -> Any:
+        if hasattr(self, key):
+            return getattr(self, key)
+        raise KeyError(key)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "text": self.text,
+            "metadata": self.metadata,
+            "score": self.score,
+            "rank": self.rank,
+            "rrf_score": self.rrf_score,
+            "ce_score": self.ce_score,
+        }
+
 
 @dataclass
 class RetrievalResult:
@@ -86,6 +104,7 @@ class EnhancedQuery:
     target_phase: str | None = None
     difficulty: str | None = None
     multi_queries: list[str] = field(default_factory=list)
+    suggested_top_k: int | None = None
 
 
 @dataclass
@@ -99,4 +118,5 @@ class QueryIntent:
     expanded_terms: list[str] = field(default_factory=list)
     expanded_query: str = ""
     multi_queries: list[str] = field(default_factory=list)
+    suggested_top_k: int | None = None
 

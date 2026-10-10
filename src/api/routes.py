@@ -14,10 +14,6 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 
 from src.api.schemas import QueryRequest, QueryResponse, RetrieveRequest
-from src.graph.querier import (
-    get_cves_for_machine,
-    get_tools_for_machine,
-)
 from src.pipeline.retriever import HybridRetriever
 from src.pipeline.synthesizer import synthesize
 
@@ -99,14 +95,12 @@ async def query(req: QueryRequest):
 async def health():
     """Liveness / readiness probe with index stats."""
     retriever: HybridRetriever = _get_retriever()
-    graph = retriever.graph
-    n_nodes = graph.number_of_nodes() if graph is not None else 0
-    n_edges = graph.number_of_edges() if graph is not None else 0
+    stats = retriever.graph_store.get_stats()
     return {
         "status": "ok",
         "chunks_indexed": len(retriever.docs),
-        "graph_nodes": n_nodes,
-        "graph_edges": n_edges,
+        "graph_nodes": stats.get("nodes", 0),
+        "graph_edges": stats.get("edges", 0),
     }
 
 
@@ -125,57 +119,24 @@ def debug_llm():
 async def machines():
     """Sorted list of all machine node names in the knowledge graph."""
     retriever: HybridRetriever = _get_retriever()
-    graph = retriever.graph
-    if graph is None:
-        return []
-    return sorted(
-        n for n, d in graph.nodes(data=True)
-        if d.get("type") == "machine"
-    )
+    return retriever.graph_store.get_all_machines()
 
 
 @router.get("/techniques")
 async def techniques():
     """Sorted list of all technique node names in the knowledge graph."""
     retriever: HybridRetriever = _get_retriever()
-    graph = retriever.graph
-    if graph is None:
-        return []
-    return sorted(
-        n for n, d in graph.nodes(data=True)
-        if d.get("type") == "technique"
-    )
+    return retriever.graph_store.get_all_techniques()
 
 
 @router.get("/machine/{machine_name}")
 async def machine_detail(machine_name: str):
     """Return metadata, techniques, tools, and CVEs for a single machine."""
     retriever: HybridRetriever = _get_retriever()
-    graph = retriever.graph
-
-    if graph is None or machine_name not in graph:
+    details = retriever.graph_store.get_machine_details(machine_name)
+    if details is None:
         raise HTTPException(status_code=404, detail=f"Machine '{machine_name}' not found")
-
-    # Resolve OS from outgoing "os" edge
-    os_val = "unknown"
-    for succ in graph.successors(machine_name):
-        if graph.edges[machine_name, succ].get("rel") == "os":
-            os_val = succ
-            break
-
-    # Techniques (successors with type=technique)
-    techs = sorted(
-        n for n in graph.successors(machine_name)
-        if graph.nodes[n].get("type") == "technique"
-    )
-
-    return {
-        "machine":    machine_name,
-        "os":         os_val,
-        "techniques": techs,
-        "tools":      get_tools_for_machine(graph, machine_name),
-        "cves":       get_cves_for_machine(graph, machine_name),
-    }
+    return details
 
 
 @router.post("/retrieve")

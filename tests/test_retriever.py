@@ -71,9 +71,10 @@ def test_retrieve_manifest_injection_broad():
     retriever.graph_store.get_manifest_for_query.return_value = sample_manifest
 
     result = retriever.retrieve("Linux privilege escalation cheatsheet")
-    assert isinstance(result, RetrievalResult)
-    # Manifest injection is disabled to eliminate overfitting
-    assert result.manifest is None
+    # Manifest is attached for broad queries to provide structured corpus coverage
+    assert result.manifest is not None
+    assert len(result.manifest) > 0
+    assert result.manifest[0]["machine"] == "htb-active"
     assert result.get("graph") == {"relevant_machines": []}
 
 
@@ -99,4 +100,72 @@ def test_retrieve_manifest_none_for_specific():
     result = retriever.retrieve("htb-active Kerberoasting port 88")
     assert isinstance(result, RetrievalResult)
     assert result.manifest is None
+
+
+def test_graph_guided_candidate_injection_for_broad_query():
+    from unittest.mock import MagicMock
+    from src.domain.models import RetrievalResult
+
+    retriever = HybridRetriever.__new__(HybridRetriever)
+    retriever.vector_store = MagicMock()
+    retriever.graph_store = MagicMock()
+    retriever.embedding_service = MagicMock()
+    retriever.reranker = MagicMock()
+    retriever.graph = None
+
+    doc_a = {"text": "Chunk from box-a on linux privesc", "metadata": {"source": "box-a", "os": "linux"}}
+    doc_b = {"text": "Chunk from box-b on linux sudo privilege", "metadata": {"source": "box-b", "os": "linux"}}
+    retriever.docs = [doc_a, doc_b]
+    retriever._machine_docs = {"box-a": [doc_a], "box-b": [doc_b]}
+    retriever._machine_doc_indices = {"box-a": [0], "box-b": [1]}
+
+    retriever._bm25_index = MagicMock()
+    retriever._bm25_index.get_scores_for_query.return_value = [0.5, 0.9]
+
+    retriever.bm25_search = MagicMock(return_value=[{"text": doc_a["text"], "metadata": doc_a["metadata"], "score": 0.5, "rank": 1}])
+    retriever.vector_search = MagicMock(return_value=[])
+    retriever.reciprocal_rank_fusion = MagicMock(return_value=[{"text": doc_a["text"], "metadata": doc_a["metadata"], "score": 0.5, "rrf_score": 0.016, "rank": 1}])
+    retriever.reranker.rerank = MagicMock(side_effect=lambda q, c: c)
+
+    retriever.graph_store.query_graph.return_value = {"relevant_machines": ["box-a", "box-b"]}
+
+    result = retriever.retrieve("Linux privilege escalation techniques")
+
+    assert retriever.reranker.rerank.called
+    rerank_chunks = retriever.reranker.rerank.call_args[0][1]
+    sources_in_rerank = {c["metadata"]["source"] for c in rerank_chunks}
+    assert "box-b" in sources_in_rerank
+    assert "box-a" in sources_in_rerank
+
+
+def test_adaptive_top_k_budget_for_broad_query():
+    from unittest.mock import MagicMock
+    from src.domain.models import RetrievalResult
+
+    retriever = HybridRetriever.__new__(HybridRetriever)
+    retriever.vector_store = MagicMock()
+    retriever.graph_store = MagicMock()
+    retriever.embedding_service = MagicMock()
+    retriever.reranker = MagicMock()
+    retriever.graph = None
+    retriever.docs = []
+    retriever._machine_docs = {}
+    retriever._machine_doc_indices = {}
+    retriever._bm25_index = None
+
+    retriever.bm25_search = MagicMock(return_value=[])
+    retriever.vector_search = MagicMock(return_value=[])
+    retriever.reciprocal_rank_fusion = MagicMock(return_value=[])
+    retriever.reranker.rerank = MagicMock(return_value=[])
+
+    # Case 1: 50 relevant machines -> budget capped at 30
+    retriever.graph_store.query_graph.return_value = {
+        "relevant_machines": [f"box-{i}" for i in range(50)]
+    }
+    result_large = retriever.retrieve("Linux privilege escalation cheatsheet")
+    assert isinstance(result_large, RetrievalResult)
+
+    # Case 2: Specific query -> budget stays at base_k (8)
+    result_specific = retriever.retrieve("htb-active Kerberoasting port 88")
+    assert isinstance(result_specific, RetrievalResult)
 

@@ -13,9 +13,6 @@ from typing import Any
 
 from src.domain.interfaces import LLMProvider
 from src.domain.models import RetrievalResult
-from src.infrastructure.gemini_provider import GeminiProvider
-from src.infrastructure.groq_provider import GroqProvider, clean_response
-from src.infrastructure.openrouter_provider import OpenRouterProvider
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +46,8 @@ Rules:
 """
 
 # ── Context size budget ──────────────────────────────────────────────────────
-_MAX_CONTEXT_CHARS = 18000   # Broad queries retrieve 25 chunks; modern LLMs handle 128K+
-_MAX_CHUNK_CHARS   = 1500
+_MAX_CONTEXT_CHARS = 5500    # Lean, fast ~1,200 token budget for sub-second synthesis
+_MAX_CHUNK_CHARS   = 900     # Dense command and exploit step focus
 
 
 def compress_context_chunk(text: str, max_chars: int = _MAX_CHUNK_CHARS) -> str:
@@ -87,49 +84,73 @@ def compress_context_chunk(text: str, max_chars: int = _MAX_CHUNK_CHARS) -> str:
 #  Context formatting
 # ═════════════════════════════════════════════════════════════════════════════
 
-def format_context(retrieval_result: dict[str, Any] | RetrievalResult) -> str:
-    """Build a context string from retrieval results.
+def format_context(
+    retrieval_result: dict[str, Any] | RetrievalResult,
+    is_broad: bool | None = None,
+) -> str:
+    """Build a concise, high-density context string from retrieval results.
 
-    * Prepends verified graph findings (technique → machines mapping) when available.
-    * Appends each chunk compressed to remove terminal noise.
-    * Appends complete machine manifest table when available.
-    * Total output capped at context budget.
+    * Injects 5-8 compressed chunk excerpts focusing on exact exploit steps.
+    * Appends compact machine manifest table for full corpus coverage when available.
+    * Capped strictly at ~5,500 characters (~1,200 tokens) to guarantee sub-second synthesis.
     """
     parts: list[str] = []
     used = 0
 
-    # ── Graph findings header ────────────────────────────────────────────
-    graph = retrieval_result.get("graph", {})
-    tech_map = graph.get("technique_machines", {})
-    techniques = graph.get("matched_techniques", [])
-    machines   = graph.get("relevant_machines", [])
+    chunks = (
+        retrieval_result.chunks
+        if isinstance(retrieval_result, RetrievalResult)
+        else (retrieval_result.get("chunks", []) if hasattr(retrieval_result, "get") else [])
+    )
+    if is_broad is None:
+        is_broad = len(chunks) > 5
 
-    if tech_map:
-        header_lines = ["=== Graph Findings (Verified Techniques & Observed Machines) ==="]
-        for tech, machs in list(tech_map.items())[:12]:
-            mach_str = ", ".join(machs[:4])
-            header_lines.append(f"- {tech} (seen on: {mach_str})")
-        header_lines.append("===\n")
-        header = "\n".join(header_lines)
-        parts.append(header)
-        used += len(header)
-    elif techniques or machines:
-        header = (
-            "=== Graph Findings ===\n"
-            f"Techniques: {', '.join(techniques[:15])}\n"
-            f"Observed on: {', '.join(machines[:20])}\n"
-            "===\n"
-        )
-        parts.append(header)
-        used += len(header)
+    max_budget = 6500 if is_broad else _MAX_CONTEXT_CHARS
 
-    # ── Chunk excerpts with Context Compression ──────────────────────────
-    for chunk in retrieval_result.get("chunks", []):
-        meta   = chunk.get("metadata", {})
+    manifest = (
+        retrieval_result.manifest
+        if isinstance(retrieval_result, RetrievalResult)
+        else retrieval_result.get("manifest")
+    )
+
+    # ── Graph findings header (only if no manifest table to prevent duplication) ──
+    if not manifest:
+        graph = retrieval_result.get("graph", {})
+        tech_map = graph.get("technique_machines", {})
+        techniques = graph.get("matched_techniques", [])
+        machines   = graph.get("relevant_machines", [])
+
+        if tech_map:
+            header_lines = ["=== Graph Findings (Verified Techniques & Observed Machines) ==="]
+            for tech, machs in list(tech_map.items())[:6]:
+                mach_str = ", ".join(machs[:3])
+                header_lines.append(f"- {tech} (seen on: {mach_str})")
+            header_lines.append("===\n")
+            header = "\n".join(header_lines)
+            parts.append(header)
+            used += len(header)
+        elif techniques or machines:
+            header = (
+                "=== Graph Findings ===\n"
+                f"Techniques: {', '.join(techniques[:8])}\n"
+                f"Observed on: {', '.join(machines[:10])}\n"
+                "===\n"
+            )
+            parts.append(header)
+            used += len(header)
+
+    # ── Chunk excerpts with Context Compression ──
+    for chunk in chunks:
+        if isinstance(chunk, dict):
+            meta: dict[str, Any] = chunk.get("metadata", {}) or {}
+            raw_text: str = str(chunk.get("text", ""))
+        else:
+            meta = getattr(chunk, "metadata", {}) or {}
+            raw_text = str(getattr(chunk, "text", ""))
+
         source = meta.get("source", "?")
         bc     = meta.get("breadcrumb", "")
         parent = meta.get("parent_path") or bc
-        raw_text = chunk.get("text", "")
         text   = compress_context_chunk(raw_text, max_chars=_MAX_CHUNK_CHARS)
 
         block = (
@@ -137,39 +158,85 @@ def format_context(retrieval_result: dict[str, Any] | RetrievalResult) -> str:
             f"{text}\n"
         )
 
-        if used + len(block) > _MAX_CONTEXT_CHARS:
+        if used + len(block) > max_budget:
             break
 
         parts.append(block)
         used += len(block)
 
-    # ── Manifest Table Injection ─────────────────────────────────────
-    manifest = (
-        retrieval_result.manifest
-        if isinstance(retrieval_result, RetrievalResult)
-        else retrieval_result.get("manifest")
-    )
+    # ── Manifest Table Injection (Compact ~200-300 tokens) ──
     if manifest:
         manifest_lines = ["=== Complete Machine Manifest (Graph-Verified) ==="]
         manifest_lines.append("| Machine | OS | Techniques |")
         manifest_lines.append("|---------|-----|-----------|")
-        for entry in manifest[:40]:  # Cap at 40 to prevent token bloat and LLM rate limits
-            techs = ", ".join(entry.get("techniques", [])[:3])
+        for entry in manifest[:30]:  # Up to 30 machines gives wide coverage in ~180 tokens
+            techs = ", ".join(entry.get("techniques", [])[:2])
             manifest_lines.append(f"| {entry['machine']} | {entry.get('os', '?')} | {techs} |")
         manifest_lines.append("===\n")
         manifest_block = "\n".join(manifest_lines)
 
-        # Only include if within context budget
-        if used + len(manifest_block) < _MAX_CONTEXT_CHARS:
+        if used + len(manifest_block) < max_budget + 1500:
             parts.append(manifest_block)
             used += len(manifest_block)
 
     return "\n".join(parts)
 
 
+def clean_response(text: str) -> str:
+    """Strip chain-of-thought artifacts, reasoning monologues, and repair unclosed markdown."""
+    if not text:
+        return ""
+
+    cleaned = text
+
+    # 1. Strip explicit <think>...</think> tags
+    cleaned = re.sub(r"<think>.*?</think>", "", cleaned, flags=re.DOTALL)
+
+    # 2. Strip thinking process headers if a model leaks internal monologue
+    if "Here's a thinking process:" in cleaned:
+        m = re.search(
+            r"\n(#+\s+|###?\s+Recon|###?\s+Foothold|[-*]\s+\*\*|[-*]\s+`|[A-Z][a-z]+:)",
+            cleaned,
+        )
+        if m:
+            cleaned = cleaned[m.start():]
+
+    # 3. Strip leading reasoning paragraphs like "We need to answer: ... Let's extract ..."
+    if cleaned.lstrip().startswith("We need to answer:") or cleaned.lstrip().startswith(
+        "We must use only"
+    ):
+        m = re.search(r"\n(#+\s+|Recon\b|Foothold\b|[-*]\s+)", cleaned)
+        if m:
+            cleaned = cleaned[m.start():]
+
+    cleaned = cleaned.strip()
+
+    # 4. Repair unclosed multi-line code fences ```
+    if cleaned.count("```") % 2 != 0:
+        cleaned += "\n```"
+
+    # 5. Repair unclosed inline code backticks `
+    if cleaned.count("`") % 2 != 0:
+        cleaned += "`"
+
+    return cleaned
+
+
 def _clean_response(text: str) -> str:
     """Backward-compatible alias for clean_response."""
     return clean_response(text)
+
+
+def _default_providers() -> list[LLMProvider]:
+    """Lazy fallback creating default provider chain."""
+    from src.infrastructure.groq_provider import GroqProvider
+    from src.infrastructure.openrouter_provider import OpenRouterProvider
+    from src.infrastructure.gemini_provider import GeminiProvider
+    return [
+        GroqProvider(),
+        OpenRouterProvider(),
+        GeminiProvider(),
+    ]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -185,14 +252,9 @@ class Synthesizer:
         system_prompt: str = SYSTEM_PROMPT,
     ) -> None:
         self.system_prompt = system_prompt
-        if providers is None:
-            self.providers: list[LLMProvider] = [
-                GroqProvider(),
-                GeminiProvider(),
-                OpenRouterProvider(),
-            ]
-        else:
-            self.providers = providers
+        self.providers: list[LLMProvider] = (
+            providers if providers is not None else _default_providers()
+        )
 
     def synthesize(
         self,
@@ -229,12 +291,19 @@ class Synthesizer:
 
         # ── Collect genuine sources cited / used ──────────────────────────────
         # Sources from retrieved chunks provided to the LLM (zero fake manifest sources)
-        chunks = retrieval_result.get("chunks", [])
-        chunk_sources = {
-            c.get("metadata", {}).get("source", "").lower()
-            for c in chunks
-            if c.get("metadata", {}).get("source")
-        }
+        chunks = (
+            retrieval_result.chunks
+            if isinstance(retrieval_result, RetrievalResult)
+            else (retrieval_result.get("chunks", []) if hasattr(retrieval_result, "get") else [])
+        )
+        chunk_sources: set[str] = set()
+        for c in chunks:
+            if isinstance(c, dict):
+                src = c.get("metadata", {}).get("source", "")
+            else:
+                src = getattr(c, "metadata", {}).get("source", "")
+            if src:
+                chunk_sources.add(str(src).lower())
         sources = sorted(s for s in chunk_sources if s)
 
         # ── Graph usage flag ─────────────────────────────────────────────────

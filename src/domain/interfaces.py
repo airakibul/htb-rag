@@ -94,6 +94,16 @@ class GraphStore(ABC):
         """Return a compact manifest for directly targeted techniques or tools, avoiding broad category expansion."""
         ...
 
+    @abstractmethod
+    def get_machine_details(self, machine_name: str) -> dict[str, Any] | None:
+        """Return metadata, techniques, tools, and CVEs for a single machine."""
+        ...
+
+    @abstractmethod
+    def get_stats(self) -> dict[str, int]:
+        """Return graph node and edge counts."""
+        ...
+
 
 class EmbeddingService(ABC):
     """Abstract interface for generating text embeddings."""

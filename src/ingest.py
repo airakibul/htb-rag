@@ -1,6 +1,7 @@
 """Backward-compatible shim — delegates to src.pipeline.ingest."""
 
 from src.pipeline.ingest import (  # noqa: F401
+    IngestionPipeline,
     _check_collection,
     _get_files,
     _parse_args,

@@ -27,6 +27,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.api.routes import router
+from src.container import create_retriever
 from src.pipeline.retriever import HybridRetriever
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ _state: dict[str, Any] = {}
 def get_retriever() -> HybridRetriever:
     """Safe getter for the HybridRetriever singleton."""
     if "retriever" not in _state:
-        _state["retriever"] = HybridRetriever()
+        _state["retriever"] = create_retriever()
     return _state["retriever"]
 
 

@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any
 
 import chromadb
-import google.generativeai as genai
 import requests
 from PIL import Image
 
@@ -42,13 +41,7 @@ from src.infrastructure.sentence_transformer import (
 
 logger = logging.getLogger(__name__)
 
-# ── Configure Gemini (optional for vision) ─────────────────────────────────
-if GEMINI_API_KEY and GEMINI_API_KEY != "your_gemini_key_here":
-    try:
-        genai_mod: Any = genai
-        genai_mod.configure(api_key=GEMINI_API_KEY)
-    except Exception as exc:
-        logger.warning(f"Could not configure Gemini: {exc}")
+# ── Gemini vision client is configured on-demand in describe_image ─────────
 
 # ── Regex / patterns ─────────────────────────────────────────────────────────
 _IMG_URL_RE = re.compile(r"!\[.*?\]\((https?://\S+?)\)")
@@ -157,11 +150,21 @@ def describe_image(url: str) -> str | None:
         resp.raise_for_status()
         img = Image.open(io.BytesIO(resp.content))
 
-        # Vision model
-        genai_mod: Any = genai
-        model = genai_mod.GenerativeModel(GEMINI_VISION_MODEL)
-        response = model.generate_content([_VISION_PROMPT, img])
-        description = response.text.strip()
+        # Vision model via google.genai or fallback
+        try:
+            from google import genai
+            client = genai.Client(api_key=GEMINI_API_KEY)
+            response = client.models.generate_content(
+                model=GEMINI_VISION_MODEL,
+                contents=[_VISION_PROMPT, img],
+            )
+            description = (response.text or "").strip()
+        except ImportError:
+            import google.generativeai as legacy_genai
+            legacy_genai.configure(api_key=GEMINI_API_KEY)
+            model = legacy_genai.GenerativeModel(GEMINI_VISION_MODEL)
+            response = model.generate_content([_VISION_PROMPT, img])
+            description = (response.text or "").strip()
 
         # Update cache
         cache[key] = description

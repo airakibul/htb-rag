@@ -22,6 +22,7 @@ from src.graph.manifest import (
 )
 from src.graph.querier import (
     get_cves_for_machine,
+    get_machine_details,
     get_machines_for_technique,
     get_techniques_for_category,
     get_tools_for_machine,
@@ -106,6 +107,19 @@ class NetworkXGraphStore(GraphStore):
         """Return a compact manifest for directly targeted techniques or tools, avoiding broad category expansion."""
         return get_technique_manifest_for_query(self.graph, query, os_filter=os_filter)
 
+
+    def get_machine_details(self, machine_name: str) -> dict[str, Any] | None:
+        """Return metadata, techniques, tools, and CVEs for a single machine."""
+        return get_machine_details(self.graph, machine_name)
+
+    def get_stats(self) -> dict[str, int]:
+        """Return graph node and edge counts."""
+        if self.graph is None:
+            return {"nodes": 0, "edges": 0}
+        return {
+            "nodes": self.graph.number_of_nodes(),
+            "edges": self.graph.number_of_edges(),
+        }
 
     # Convenience delegators for graph navigation
     def get_tools_for_machine(self, machine: str) -> list[str]:

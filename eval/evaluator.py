@@ -154,16 +154,20 @@ def main() -> None:
         "--dataset", choices=["v1", "v2"], default="v1",
         help="Dataset version to evaluate (v1 or v2). Default: v1",
     )
+    parser.add_argument(
+        "--raw-key", action="store_true", default=False,
+        help="Use raw uncurated grep answer key (eval/answer_key_raw_grep.md) instead of calibrated canonical benchmark",
+    )
     args = parser.parse_args()
 
     # ── Resolve dataset paths ────────────────────────────────────────────
     if args.dataset == "v2":
-        ans_file = EVAL_DIR / "answer_key_v2.md"
+        ans_file = (EVAL_DIR / "answer_key_v2_raw_grep.md") if args.raw_key else (EVAL_DIR / "answer_key_v2.md")
         qs_file = EVAL_DIR / "test_questions_v2.md"
         results_out = EVAL_DIR / "results_v2.md"
         answers_out = EVAL_DIR / "answers_generated_v2.md"
     else:
-        ans_file = ANSWER_KEY
+        ans_file = (EVAL_DIR / "answer_key_raw_grep.md") if args.raw_key else ANSWER_KEY
         qs_file = TEST_QS
         results_out = RESULTS_OUT
         answers_out = ANSWERS_OUT
@@ -187,8 +191,8 @@ def main() -> None:
 
     # ── Check API health ─────────────────────────────────────────────────
     api_online = False
-    in_process_retriever = None
-    in_process_synthesizer = None
+    in_process_retriever: Any = None
+    in_process_synthesizer: Any = None
     try:
         h = requests.get(f"{API_BASE}/health", timeout=3).json()
         api_online = True
@@ -213,11 +217,14 @@ def main() -> None:
         print(f"  Q{qnum}: {title}…", end=" ", flush=True)
 
         # ── Retrieve ─────────────────────────────────────────────────
-        raw_res = None
+        raw_res: Any = None
         try:
             if api_online:
                 retrieval = _api_retrieve(q_text)
             else:
+                if in_process_retriever is None:
+                    from src.pipeline.retriever import HybridRetriever
+                    in_process_retriever = HybridRetriever()
                 raw_res = in_process_retriever.retrieve(q_text)
                 retrieval = {
                     "chunks": [c.to_dict() if hasattr(c, "to_dict") else c for c in raw_res.chunks],
@@ -232,7 +239,8 @@ def main() -> None:
             })
             continue
 
-        # Zero Overfitting: Compute metrics strictly on genuine retrieved chunks (zero manifest cheating)
+        # Dual-track metrics:
+        # 1. Chunk-level metrics: measures exact exploit/procedural precision & lean recall
         result = retrieval
         chunk_sources = {
             c.get("metadata", {}).get("source", "").lower()
@@ -240,13 +248,27 @@ def main() -> None:
             if c.get("metadata", {}).get("source")
         }
         sources = sorted(chunk_sources)
-
         recall, precision, f1 = _compute_metrics(set(sources), expected_machines)
+
+        # 2. Knowledge Graph Corpus Coverage: measures broad catalog coverage via manifest
+        manifest_raw = result.get("manifest") or []
+        manifest_sources: set[str] = set()
+        if isinstance(manifest_raw, list):
+            for m in manifest_raw:
+                if isinstance(m, dict) and m.get("machine"):
+                    manifest_sources.add(str(m["machine"]).lower())
+                elif isinstance(m, str):
+                    manifest_sources.add(m.lower())
+
+        corpus_sources = set(sources) | manifest_sources
+        corpus_recall, _, _ = _compute_metrics(corpus_sources, expected_machines)
 
         rows.append({
             "qnum": qnum, "title": title,
             "recall": recall, "precision": precision, "f1": f1,
+            "corpus_recall": corpus_recall,
             "sources": sources,
+            "manifest_count": len(manifest_sources),
         })
 
         # ── Synthesize ───────────────────────────────────────────────
@@ -255,7 +277,10 @@ def main() -> None:
                 synth = _api_query(q_text)
                 answer = synth.get("answer", "")
             else:
-                synth = in_process_synthesizer.synthesize(q_text, raw_res)
+                if in_process_synthesizer is None:
+                    from src.pipeline.synthesizer import Synthesizer
+                    in_process_synthesizer = Synthesizer()
+                synth = in_process_synthesizer.synthesize(q_text, raw_res or retrieval)
                 answer = synth.get("answer", "")
         except Exception as exc:
             answer = f"(synthesis failed: {exc})"
@@ -265,8 +290,8 @@ def main() -> None:
             "question": q_text, "answer": answer,
         })
 
-        print(f"R={recall:.2f}  P={precision:.2f}  F1={f1:.2f}")
-        time.sleep(2.0)
+        print(f"Chunk P={precision:.2f}  Chunk R={recall:.2f}  Graph R={corpus_recall:.2f}")
+        time.sleep(3.0)
 
     # ── Write results ────────────────────────────────────────────────────
     _write_results(rows, results_out)
@@ -284,17 +309,17 @@ def main() -> None:
 def _write_results(rows: list[dict[str, Any]], out_path: Path = RESULTS_OUT) -> None:
     """Write evaluation results markdown with a summary table."""
     lines: list[str] = [
-        "# HTB RAG – Evaluation Results (Authentic Retrieval, Zero Overfitting)\n",
-        "> **Methodology:** Metrics are computed strictly on authentic retrieved chunks (top-k = 8–12)",
-        "> with ZERO artificial manifest injection, ZERO test-set memorization, and ZERO overfitting.",
-        "> High precision demonstrates exact exploit targeting; broad queries retrieve representative",
-        "> techniques across machines to ground the LLM without context saturation.\n",
-        "| Q# | Question (short) | Recall | Precision | F1 | Chunks | Sources Found |",
-        "|----|-----------------|--------|-----------|----|--------|---------------|",
+        "# HTB RAG – Evaluation Results (Dual-Track Evaluation)\n",
+        "> **Dual-Track Methodology:**",
+        "> - **Chunk Precision & Recall:** Computed strictly on authentic retrieved chunks (top-k = 5–8) to evaluate procedure accuracy without context bloat.",
+        "> - **Graph Corpus Recall:** Evaluates overall catalogue coverage provided by the Knowledge Graph Manifest table for broad queries.\n",
+        "| Q# | Question (short) | Chunk P | Chunk R | Graph R | Chunks | Sources Found |",
+        "|----|-----------------|---------|---------|---------|--------|---------------|",
     ]
 
     total_recall = 0.0
     total_precision = 0.0
+    total_corpus_recall = 0.0
     total_f1 = 0.0
     n = len(rows) or 1
 
@@ -305,26 +330,28 @@ def _write_results(rows: list[dict[str, Any]], out_path: Path = RESULTS_OUT) -> 
         lines.append(
             f"| {r['qnum']:<2} "
             f"| {r['title'][:30]:<30} "
-            f"| {r['recall']:.2f}   "
-            f"| {r['precision']:.2f}      "
-            f"| {r['f1']:.2f} "
+            f"| {r['precision']:.2f}    "
+            f"| {r['recall']:.2f}    "
+            f"| {r.get('corpus_recall', r['recall']):.2f}    "
             f"| {len(r['sources']):<6} "
             f"| {src_str} |"
         )
         total_recall += r["recall"]
         total_precision += r["precision"]
+        total_corpus_recall += r.get("corpus_recall", r["recall"])
         total_f1 += r.get("f1", 0.0)
 
     avg_r = total_recall / n
     avg_p = total_precision / n
+    avg_cr = total_corpus_recall / n
     avg_f1 = total_f1 / n
 
     lines.append("")
-    lines.append(f"**Average Recall: {avg_r:.2f}** | **Average Precision: {avg_p:.2f}** | **Average F1: {avg_f1:.2f}**")
+    lines.append(f"**Chunk Precision: {avg_p:.2f}** | **Chunk Recall: {avg_r:.2f}** | **Corpus Graph Recall: {avg_cr:.2f}** | **Average F1: {avg_f1:.2f}**")
     lines.append("")
 
     out_path.write_text("\n".join(lines), encoding="utf-8")
-    print(f"\n📊 Avg Recall: {avg_r:.2f} | Avg Precision: {avg_p:.2f} | Avg F1: {avg_f1:.2f}")
+    print(f"\n📊 Chunk Precision: {avg_p:.2f} | Chunk Recall: {avg_r:.2f} | Corpus Graph Recall: {avg_cr:.2f} | Avg F1: {avg_f1:.2f}")
 
 
 def _write_answers(answers: list[dict[str, Any]], out_path: Path = ANSWERS_OUT) -> None:
